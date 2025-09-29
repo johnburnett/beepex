@@ -1,0 +1,16 @@
+section {
+    margin-bottom: 1rem;
+    width: 66%;
+    background-color: rgb(220 220 220);
+    padding: 0.5rem;
+    border-radius: 5px;;
+}
+.you {
+    margin-left: 33%;
+    background-color: rgb(206 222 255);
+}
+span {
+    font-size: 90%;
+    display: flex;
+    justify-content: end;
+}
