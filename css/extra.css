@@ -1,16 +1,55 @@
-section {
+section.chat-header {
+    background-color: rgb(212 255 220);
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    border-radius: 5px;
+}
+
+section.chat-details {
+    color: rgba(0 0 0 / 0.3);
+}
+
+span.chat-details-label {
+    font-weight: bold;
+}
+
+h1 {
+    margin: 0px;
+}
+
+h2 {
+    margin: 5px 0px;
+}
+
+section.msg {
     margin-bottom: 1rem;
     width: 66%;
-    background-color: rgb(220 220 220);
     padding: 0.5rem;
-    border-radius: 5px;;
+    border-radius: 5px;
 }
-.you {
-    margin-left: 33%;
+
+section.msg-self {
+    margin-left: 32%;
     background-color: rgb(206 222 255);
 }
-span {
-    font-size: 90%;
+
+section.msg-them {
+    background-color: rgb(220 220 220);
+}
+
+div.msg-header {
     display: flex;
-    justify-content: end;
+    justify-content: space-between;
+    align-items: center;
+}
+
+span.msg-datetime {
+    font-size: 75%;
+    color: rgba(0 0 0 / 0.4);
+    margin-left: auto;
+    margin-right: 0.5rem;
+}
+
+span.msg-contact-name {
+    font-weight: bold;
 }
