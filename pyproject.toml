@@ -6,8 +6,10 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "bleach>=6.2.0",
+    "packaging>=25.0",
     "requests>=2.32.5",
     "rich>=14.1.0",
+    "tqdm>=4.67.1",
 ]
 
 [dependency-groups]

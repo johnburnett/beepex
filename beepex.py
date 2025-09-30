@@ -1,15 +1,9 @@
-#!/usr/bin/env -S uv --quiet run --env-file .env --script
-# /// script
-# dependencies = [
-#     "rich",
-#     "requests",
-# ]
-# ///
 # https://developers.beeper.com/desktop-api/
 # https://www.beeper.com/download/nightly/now
 #
 # - Old messages require scrolling back in the UI?
 
+import argparse
 from dataclasses import dataclass
 from datetime import datetime
 import html
@@ -22,8 +16,10 @@ import textwrap
 import typing
 
 import bleach
+from packaging import version
 import requests
 from rich import traceback
+from tqdm import tqdm
 
 traceback.install(
     show_locals=True,
@@ -54,6 +50,11 @@ class ExportContext:
     attachment_dir_path: str
     css_url_sub_dir: str
     self_id: str
+
+
+def fatal(msg):
+    print(msg)
+    sys.exit(1)
 
 
 def getHtmlHead(title, export_css_sub_dir):
@@ -200,7 +201,7 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
-    for msg in msgs:
+    for msg in tqdm(msgs, desc="Exporting messages", leave=False):
         message_to_html(ctx, chat_details, msg)
     ctx.fout.write("</main>\n")
 
@@ -220,7 +221,7 @@ def copy_css_files(output_root_dir_path, data_dir_name):
     return css_url_sub_dir
 
 
-def dump_data(data, output_root_dir):
+def dump_html(data, output_root_dir):
     msgs = data["items"]
     chat_to_messages = {}
     for msg in msgs:
@@ -230,31 +231,31 @@ def dump_data(data, output_root_dir):
 
     chat_id_to_chat_details = data["chats"]
 
-    chat_index = 0
-    for chat_id, msgs in chat_to_messages.items():
-        chat_details = chat_id_to_chat_details[chat_id]
-        self_id = None
-        for part in chat_details.get("participants", {}).get("items", []):
-            if part.get("isSelf", False):
-                self_id = part.get("id")
-        assert self_id
-        msgs.sort(key=lambda it: it["sortKey"])
+    with tqdm(chat_to_messages.items(), desc="Exporting chats") as progress:
+        for chat_id, msgs in progress:
+            chat_details = chat_id_to_chat_details[chat_id]
+            chat_title = sanitize_file_name(chat_details["title"])
+            progress.set_description(f'Exporting chat "{chat_title}"')
+            self_id = None
+            for part in chat_details.get("participants", {}).get("items", []):
+                if part.get("isSelf", False):
+                    self_id = part.get("id")
+            assert self_id
+            msgs.sort(key=lambda it: it["sortKey"])
 
-        network_dir_name = sanitize_file_name(chat_details["network"].lower())
-        chat_title = sanitize_file_name(chat_details["title"])
-        output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
-        os.makedirs(output_dir_path, exist_ok=True)
+            network_dir_name = sanitize_file_name(chat_details["network"].lower())
+            output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
+            os.makedirs(output_dir_path, exist_ok=True)
 
-        output_file_path = os.path.join(output_dir_path, chat_title + ".html")
-        attachment_dir_path = os.path.join(
-            output_root_dir, "media", network_dir_name, chat_title
-        )
-        with open(output_file_path, "w", encoding="utf-8") as fp:
-            context = ExportContext(
-                output_file_path, fp, attachment_dir_path, css_url_sub_dir, self_id
+            output_file_path = os.path.join(output_dir_path, chat_title + ".html")
+            attachment_dir_path = os.path.join(
+                output_root_dir, "media", network_dir_name, chat_title
             )
-            messages_to_html(context, chat_details, msgs)
-        chat_index += 1
+            with open(output_file_path, "w", encoding="utf-8") as fp:
+                context = ExportContext(
+                    output_file_path, fp, attachment_dir_path, css_url_sub_dir, self_id
+                )
+                messages_to_html(context, chat_details, msgs)
 
 
 def get_all_messages():
@@ -263,34 +264,58 @@ def get_all_messages():
         "items": [],
         "chats": {},
     }
-    while True:
-        params = {"limit": 20}  # 20 is the cap per page
-        params["excludeLowPriority"] = False
-        params["includeMuted"] = True
-        if cursor:
-            params["cursor"] = cursor
-            params["direction"] = "before"
+    with tqdm(desc="Gathering Beeper messages") as progress:
+        while True:
+            params = {"limit": 20}  # 20 is the cap per page
+            params["excludeLowPriority"] = False
+            params["includeMuted"] = True
+            if cursor:
+                params["cursor"] = cursor
+                params["direction"] = "before"
 
-        resp = requests.get(
-            f"{BEEPER_HOST_URL}/v0/search-messages",
-            headers=REQUEST_HEADERS,
-            params=params,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+            resp = requests.get(
+                f"{BEEPER_HOST_URL}/v0/search-messages",
+                headers=REQUEST_HEADERS,
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-        all_data["chats"].update(data.get("chats", {}))
-        all_data["items"].extend(data.get("items", []))
-        if not data.get("hasMore") or not data.get("oldestCursor"):
-            break
-        cursor = data["oldestCursor"]
+            all_data["chats"].update(data.get("chats", {}))
+            all_data["items"].extend(data.get("items", []))
+            if not data.get("hasMore") or not data.get("oldestCursor"):
+                break
+            cursor = data["oldestCursor"]
+            progress.update()
     return all_data
 
 
+def check_beeper_version():
+    resp = requests.get(
+        f"{BEEPER_HOST_URL}/v0/search-messages",
+        headers=REQUEST_HEADERS,
+    )
+    resp.raise_for_status()
+    beeper_version_str = resp.headers.get("X-Beeper-Desktop-Version")
+    if not beeper_version_str:
+        fatal("Can't get Beeper desktop version")
+    beeper_version = version.parse(beeper_version_str)
+    min_version = version.parse("4.1.244")
+    if beeper_version < min_version:
+        fatal(
+            f"Installed Beeper {beeper_version} is too old, version {min_version} is required."
+        )
+
+
 def main():
-    output_root_dir = sys.argv[1]
+    check_beeper_version()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("output_root_dir")
+    args = parser.parse_args()
+
     data = get_all_messages()
-    dump_data(data, output_root_dir)
+    dump_html(data, args.output_root_dir)
 
 
 if __name__ == "__main__":
