@@ -2,6 +2,10 @@
 # https://www.beeper.com/download/nightly/now
 #
 # - Old messages require scrolling back in the UI?
+#   there is going to be two new endpoints:
+#   - list-chats (no filters, only timestamp-based cursor)
+#   - list-messages (for each chat, same timestamp based cursor, no other filter) for paginating everything
+#     list-messages will try to load more messages from the network, so it'll be like scrolling back, but programmatically
 
 import argparse
 from dataclasses import dataclass
@@ -291,10 +295,14 @@ def get_all_messages():
 
 
 def check_beeper_version():
-    resp = requests.get(
-        f"{BEEPER_HOST_URL}/v0/search-messages",
-        headers=REQUEST_HEADERS,
-    )
+    try:
+        resp = requests.get(
+            f"{BEEPER_HOST_URL}/v0/search-messages",
+            headers=REQUEST_HEADERS,
+        )
+    except requests.ConnectionError as ex:
+        print("Error connecting to Beeper, make sure the Beeper Desktop API is enabled.")
+        fatal(repr(ex))
     resp.raise_for_status()
     beeper_version_str = resp.headers.get("X-Beeper-Desktop-Version")
     if not beeper_version_str:
@@ -308,14 +316,17 @@ def check_beeper_version():
 
 
 def main():
-    check_beeper_version()
+    try:
+        check_beeper_version()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("output_root_dir")
-    args = parser.parse_args()
+        parser = argparse.ArgumentParser()
+        parser.add_argument("output_root_dir")
+        args = parser.parse_args()
 
-    data = get_all_messages()
-    dump_html(data, args.output_root_dir)
+        data = get_all_messages()
+        dump_html(data, args.output_root_dir)
+    except KeyboardInterrupt:
+        fatal('Manually aborted')
 
 
 if __name__ == "__main__":
