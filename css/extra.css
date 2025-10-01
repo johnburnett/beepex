@@ -1,12 +1,26 @@
+:root {
+    --chat-header-background: rgb(212 255 220);
+    --msg-self-background: rgb(206 222 255);
+    --msg-them-background: rgb(220 220 220);
+}
+
+@media (prefers-color-scheme: dark) {
+:root {
+    --chat-header-background: rgb(75 97 79);
+    --msg-self-background: rgb(92 102 121);
+    --msg-them-background: rgb(82 82 82);
+}
+}
+
 section.chat-header {
-    background-color: rgb(212 255 220);
+    background-color: var(--chat-header-background);
     margin-bottom: 1rem;
     padding: 0.5rem;
     border-radius: 5px;
 }
 
 section.chat-details {
-    color: rgba(0 0 0 / 0.3);
+    color: var(--text-muted);
 }
 
 span.chat-details-label {
@@ -30,11 +44,11 @@ section.msg {
 
 section.msg-self {
     margin-left: 32%;
-    background-color: rgb(206 222 255);
+    background-color: var(--msg-self-background);
 }
 
 section.msg-them {
-    background-color: rgb(220 220 220);
+    background-color: var(--msg-them-background);
 }
 
 div.msg-header {
@@ -45,7 +59,7 @@ div.msg-header {
 
 span.msg-datetime {
     font-size: 75%;
-    color: rgba(0 0 0 / 0.4);
+    color: var(--text-muted);
     margin-left: auto;
     margin-right: 0.5rem;
 }
