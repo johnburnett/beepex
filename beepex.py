@@ -1,6 +1,7 @@
 # https://developers.beeper.com/desktop-api/
 # https://www.beeper.com/download/nightly/now
 #
+# - Safe to delete local hydrated attachments?  Does beeper gc them?
 # - Old messages require scrolling back in the UI?
 #   there is going to be two new endpoints:
 #   - list-chats (no filters, only timestamp-based cursor)
@@ -8,6 +9,7 @@
 #     list-messages will try to load more messages from the network, so it'll be like scrolling back, but programmatically
 
 import argparse
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 import html
@@ -24,6 +26,7 @@ from packaging import version
 import requests
 from rich import traceback
 from tqdm import tqdm
+from tqdm.asyncio import tqdm_asyncio
 
 traceback.install(
     show_locals=True,
@@ -52,6 +55,8 @@ class ExportContext:
     output_file_path: str
     fout: typing.TextIO
     attachment_dir_path: str
+    # Map attachment srcURL to local hydrated file:/// URL
+    att_source_to_hydrated: dict[str, str]
     css_url_sub_dir: str
     self_id: str
 
@@ -61,7 +66,7 @@ def fatal(msg):
     sys.exit(1)
 
 
-def getHtmlHead(title, export_css_sub_dir):
+def get_html_head(title, export_css_sub_dir):
     head = f'''<!DOCTYPE html>
     <html lang="en">
     <head>
@@ -76,7 +81,7 @@ def getHtmlHead(title, export_css_sub_dir):
     return textwrap.dedent(head)
 
 
-def getHtmlTail():
+def get_html_tail():
     return """
     </body>
     </html>
@@ -113,19 +118,43 @@ def chat_details_to_html(fout, chat_details):
     fout.write("</section>")
 
 
-def download_attachment(attachment_dir_path, msg, att):
+async def hydrate_attachment(url):
+    """Make Beeper download a cached copy of the attachment.
+
+    Returns the file:/// URL of the attachment in Beeper's local cache.
+    """
+    def _sync(url):
+        if url.startswith("mxc://"):
+            resp = requests.post(
+                f"{BEEPER_HOST_URL}/v0/download-asset",
+                headers=REQUEST_HEADERS,
+                json={"url": url},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["srcURL"]
+        else:
+            return url
+    return await asyncio.to_thread(_sync, url)
+
+
+async def hydrate_all_attachments(urls):
+    tasks = [hydrate_attachment(url) for url in urls]
+    return await tqdm_asyncio.gather(*tasks, total=len(tasks), desc="Downloading attachments")
+
+
+def get_attachment_urls(msgs):
+    urls = []
+    for msg in msgs:
+        for att in msg.get("attachments", []):
+            urls.append(att["srcURL"])
+    return urls
+
+
+def archive_attachment(attachment_dir_path, att_source_to_hydrated, msg, att):
     source_url = att["srcURL"]
-    if source_url.startswith("mxc://"):
-        resp = requests.post(
-            f"{BEEPER_HOST_URL}/v0/download-asset",
-            headers=REQUEST_HEADERS,
-            json={"url": source_url},
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        source_url = data["srcURL"]
-    assert source_url.startswith("file:///")
-    source_file_path = source_url[len("file:///") :]
+    hydrated_url = att_source_to_hydrated[source_url]
+    source_file_path = hydrated_url[len("file:///") :]
     if os.path.sep != "/":
         source_file_path = source_file_path.replace("/", os.path.sep)
     os.makedirs(attachment_dir_path, exist_ok=True)
@@ -161,7 +190,7 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
         ctx.fout.write(msg_text)
 
     for att in msg.get("attachments", []):
-        att_file_path = download_attachment(ctx.attachment_dir_path, msg, att)
+        att_file_path = archive_attachment(ctx.attachment_dir_path, ctx.att_source_to_hydrated, msg, att)
         att_url = os.path.relpath(
             att_file_path, start=os.path.dirname(ctx.output_file_path)
         )
@@ -197,7 +226,7 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
         assert msg["chatID"] == chat_id
 
     ctx.fout.write(
-        getHtmlHead(chat_details["title"], posixpath.join("../..", ctx.css_url_sub_dir))
+        get_html_head(chat_details["title"], posixpath.join("../..", ctx.css_url_sub_dir))
     )
 
     ctx.fout.write("<header>\n")
@@ -209,7 +238,7 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
         message_to_html(ctx, chat_details, msg)
     ctx.fout.write("</main>\n")
 
-    ctx.fout.write(getHtmlTail())
+    ctx.fout.write(get_html_tail())
 
 
 def copy_css_files(output_root_dir_path, data_dir_name):
@@ -225,7 +254,7 @@ def copy_css_files(output_root_dir_path, data_dir_name):
     return css_url_sub_dir
 
 
-def dump_html(data, output_root_dir):
+def dump_html(data, att_source_to_hydrated, output_root_dir):
     msgs = data["items"]
     chat_to_messages = {}
     for msg in msgs:
@@ -257,7 +286,7 @@ def dump_html(data, output_root_dir):
             )
             with open(output_file_path, "w", encoding="utf-8") as fp:
                 context = ExportContext(
-                    output_file_path, fp, attachment_dir_path, css_url_sub_dir, self_id
+                    output_file_path, fp, attachment_dir_path, att_source_to_hydrated, css_url_sub_dir, self_id
                 )
                 messages_to_html(context, chat_details, msgs)
 
@@ -315,7 +344,7 @@ def check_beeper_version():
         )
 
 
-def main():
+async def main():
     try:
         check_beeper_version()
 
@@ -324,10 +353,16 @@ def main():
         args = parser.parse_args()
 
         data = get_all_messages()
-        dump_html(data, args.output_root_dir)
+        att_source_urls = get_attachment_urls(data["items"])
+        att_hydrated_urls = await hydrate_all_attachments(att_source_urls)
+        assert len(att_source_urls) == len(att_hydrated_urls)
+        for url in att_hydrated_urls:
+            assert url.startswith("file:///")
+        att_source_to_hydrated = dict(zip(att_source_urls, att_hydrated_urls))
+        dump_html(data, att_source_to_hydrated, args.output_root_dir)
     except KeyboardInterrupt:
         fatal('Manually aborted')
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
