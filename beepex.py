@@ -1,7 +1,8 @@
 # https://developers.beeper.com/desktop-api/
 # https://www.beeper.com/download/nightly/now
 #
-# - Safe to delete local hydrated attachments?  Does beeper gc them?
+# - Show replies somehow?
+#   - Will add linkedMessageID field to message
 # - Old messages require scrolling back in the UI?
 #   there is going to be two new endpoints:
 #   - list-chats (no filters, only timestamp-based cursor)
@@ -58,7 +59,6 @@ class ExportContext:
     # Map attachment srcURL to local hydrated file:/// URL
     att_source_to_hydrated: dict[str, str]
     css_url_sub_dir: str
-    self_id: str
 
 
 def fatal(msg):
@@ -173,7 +173,7 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
     # ctx.fout.write(f'<section><pre>{pformat(msg)}</pre></section>\n')
     # return
 
-    sec_class = "msg-self" if ctx.self_id == msg.get("senderID") else "msg-them"
+    sec_class = "msg-self" if msg.get("isSender") else "msg-them"
     message_id = msg["messageID"]
     ts_utc = datetime.fromisoformat(msg["timestamp"])
     ts_local = ts_utc.astimezone()
@@ -269,11 +269,6 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
             chat_details = chat_id_to_chat_details[chat_id]
             chat_title = sanitize_file_name(chat_details["title"])
             progress.set_description(f'Exporting chat "{chat_title}"')
-            self_id = None
-            for part in chat_details.get("participants", {}).get("items", []):
-                if part.get("isSelf", False):
-                    self_id = part.get("id")
-            assert self_id
             msgs.sort(key=lambda it: it["sortKey"])
 
             network_dir_name = sanitize_file_name(chat_details["network"].lower())
@@ -286,7 +281,7 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
             )
             with open(output_file_path, "w", encoding="utf-8") as fp:
                 context = ExportContext(
-                    output_file_path, fp, attachment_dir_path, att_source_to_hydrated, css_url_sub_dir, self_id
+                    output_file_path, fp, attachment_dir_path, att_source_to_hydrated, css_url_sub_dir
                 )
                 messages_to_html(context, chat_details, msgs)
 
