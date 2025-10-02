@@ -1,5 +1,8 @@
-# https://developers.beeper.com/desktop-api/
+# -*- coding: utf-8 -*-
 # https://www.beeper.com/download/nightly/now
+# https://developers.beeper.com/desktop-api/
+# https://developers.beeper.com/desktop-api-reference/resources/$shared
+# https://developers.beeper.com/desktop-api-reference/resources/chats#(resource)%20chats%20%3E%20(model)%20chat%20%3E%20(schema)
 #
 # - Show replies somehow?
 #   - Will add linkedMessageID field to message
@@ -18,8 +21,8 @@ import os
 import posixpath
 import re
 import shutil
+import socket
 import sys
-import textwrap
 import typing
 
 import bleach
@@ -66,28 +69,6 @@ def fatal(msg):
     sys.exit(1)
 
 
-def get_html_head(title, export_css_sub_dir):
-    head = f'''<!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Chat: {title}</title>
-        <link rel="stylesheet" href="{export_css_sub_dir}/water.css">
-        <link rel="stylesheet" href="{export_css_sub_dir}/extra.css">
-    </head>
-    <body>
-    '''
-    return textwrap.dedent(head)
-
-
-def get_html_tail():
-    return """
-    </body>
-    </html>
-    """
-
-
 def sanitize_file_name(file_name):
     if file_name.casefold() in FILE_NAME_RESERVED_NAMES:
         file_name = file_name + "_"
@@ -99,22 +80,22 @@ def sanitize_file_name(file_name):
 def chat_details_to_html(fout, chat_details):
     fout.write('<section class="chat-header">\n')
     fout.write(f"<h1>{chat_details['title']}</h1>\n")
-    fout.write('<section class="chat-details">(')
+    fout.write("<details>\n")
     fout.write(
-        f'<span class="chat-details-label">Network: </span><span>{chat_details.get("network")}</span>, '
+        f'<div><span class="chat-details-label">Network: </span><span>{chat_details.get("network")}</span></div>\n'
     )
     fout.write(
-        f'<span class="chat-details-label">Account ID: </span><span>{chat_details.get("accountID")}</span>, '
+        f'<div><span class="chat-details-label">Account ID: </span><span>{chat_details.get("accountID")}</span></div>\n'
     )
     fout.write(
-        f'<span class="chat-details-label">Chat ID: </span><span>{chat_details.get("id")}</span>'
+        f'<div><span class="chat-details-label">Chat ID: </span><span>{chat_details.get("id")}</span></div>\n'
     )
-    fout.write(")</section>\n")
-    fout.write("<h2>Participants</h2>\n")
+    fout.write('<div><span class="chat-details-label">Participants:</span></div>\n')
     parts = chat_details.get("participants", {}).get("items", [])
     names = [part.get("fullName", part.get("id")) for part in parts]
-    for name in sorted(names):
+    for name in sorted(names, key=lambda it: it.casefold()):
         fout.write(f"<div>{name}</div>\n")
+    fout.write("</details>\n")
     fout.write("</section>")
 
 
@@ -123,6 +104,7 @@ async def hydrate_attachment(url):
 
     Returns the file:/// URL of the attachment in Beeper's local cache.
     """
+
     def _sync(url):
         if url.startswith("mxc://"):
             resp = requests.post(
@@ -135,12 +117,15 @@ async def hydrate_attachment(url):
             return data["srcURL"]
         else:
             return url
+
     return await asyncio.to_thread(_sync, url)
 
 
 async def hydrate_all_attachments(urls):
     tasks = [hydrate_attachment(url) for url in urls]
-    return await tqdm_asyncio.gather(*tasks, total=len(tasks), desc="Downloading attachments")
+    return await tqdm_asyncio.gather(
+        *tasks, total=len(tasks), desc="Downloading attachments"
+    )
 
 
 def get_attachment_urls(msgs):
@@ -180,7 +165,12 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
     ts_utc_str = ts_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
     ts_local_str = ts_local.strftime("%Y-%m-%d %H:%M:%S %Z")
     ctx.fout.write(
-        f'<section class="msg {sec_class}"><div id="{message_id}" class="msg-header"><span class="msg-contact-name">{msg["senderName"]}</span><span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span><a class="permalink" title="Message {message_id}" href="#{message_id}">&#x1F517;&#xFE0E;</a></div>\n'
+        f'<section class="msg {sec_class}">'
+        f'<div id="{message_id}" class="msg-header">'
+        f'<span class="msg-contact-name">{msg["senderName"]}</span>'
+        f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
+        f'<a class="permalink" title="Message {message_id}" href="#{message_id}">&#x1F517;&#xFE0E;'
+        f'</a></div>\n'
     )
 
     if "text" in msg:
@@ -190,7 +180,9 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
         ctx.fout.write(msg_text)
 
     for att in msg.get("attachments", []):
-        att_file_path = archive_attachment(ctx.attachment_dir_path, ctx.att_source_to_hydrated, msg, att)
+        att_file_path = archive_attachment(
+            ctx.attachment_dir_path, ctx.att_source_to_hydrated, msg, att
+        )
         att_url = os.path.relpath(
             att_file_path, start=os.path.dirname(ctx.output_file_path)
         )
@@ -225,8 +217,18 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
     for msg in msgs:
         assert msg["chatID"] == chat_id
 
+    css_dir = posixpath.join("../..", ctx.css_url_sub_dir)
     ctx.fout.write(
-        get_html_head(chat_details["title"], posixpath.join("../..", ctx.css_url_sub_dir))
+        f"<!DOCTYPE html>\n"
+        f'<html lang="en">\n'
+        f"<head>\n"
+        f'    <meta charset="UTF-8">\n'
+        f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f"    <title>Chat: {chat_details['title']}</title>\n"
+        f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
+        f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
+        f"</head>\n"
+        f"<body>\n"
     )
 
     ctx.fout.write("<header>\n")
@@ -238,7 +240,39 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
         message_to_html(ctx, chat_details, msg)
     ctx.fout.write("</main>\n")
 
-    ctx.fout.write(get_html_tail())
+    ctx.fout.write("</body></html>")
+
+
+def write_chats_index(output_root_dir, css_url_sub_dir, network_to_chats):
+    index_file_path = os.path.join(output_root_dir, "index.html")
+    with open(index_file_path, "w", encoding="utf-8") as fp:
+        now = datetime.now()
+        fp.write(
+            f"<!DOCTYPE html>\n"
+            f'<html lang="en">\n'
+            f"<head>\n"
+            f'    <meta charset="UTF-8">\n'
+            f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            f"    <title>Beeper Chats</title>\n"
+            f'    <link rel="stylesheet" href="{css_url_sub_dir}/water.css">\n'
+            f"</head>\n"
+            f"<body>\n"
+            f"    <h1>Beeper Chats</h1>\n"
+            f'    <div style="color: var(--text-muted);">Exported from <span style="font-family: monospace;">{socket.gethostname()}</span> on {now.strftime('%Y-%m-%d')} at {now.strftime('%H:%M:%S')}</div>\n'
+        )
+        fp.write("<ul>\n")
+        for network_name, chat_to_file_path in sorted(network_to_chats.items(), key=lambda it: it[0].casefold()):
+            fp.write(f"<li>{network_name}\n")
+            fp.write("<ul>\n")
+            for chat_title, chat_file_path in sorted(chat_to_file_path.items(), key=lambda it: it[0].casefold()):
+                chat_url = os.path.relpath(chat_file_path, start=output_root_dir)
+                if os.path.sep != "/":
+                    chat_url = chat_url.replace("/", os.path.sep)
+                fp.write(f'<li><a href="{chat_url}">{chat_title}</a></li>\n')
+            fp.write("</ul>\n")
+            fp.write("</li>\n")
+        fp.write("</ul>\n")
+        fp.write("</body></html>")
 
 
 def copy_css_files(output_root_dir_path, data_dir_name):
@@ -264,6 +298,7 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
 
     chat_id_to_chat_details = data["chats"]
 
+    network_to_chats = {}
     with tqdm(chat_to_messages.items(), desc="Exporting chats") as progress:
         for chat_id, msgs in progress:
             chat_details = chat_id_to_chat_details[chat_id]
@@ -271,7 +306,8 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
             progress.set_description(f'Exporting chat "{chat_title}"')
             msgs.sort(key=lambda it: it["sortKey"])
 
-            network_dir_name = sanitize_file_name(chat_details["network"].lower())
+            network_name = chat_details["network"]
+            network_dir_name = sanitize_file_name(network_name.lower())
             output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
             os.makedirs(output_dir_path, exist_ok=True)
 
@@ -281,9 +317,18 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
             )
             with open(output_file_path, "w", encoding="utf-8") as fp:
                 context = ExportContext(
-                    output_file_path, fp, attachment_dir_path, att_source_to_hydrated, css_url_sub_dir
+                    output_file_path,
+                    fp,
+                    attachment_dir_path,
+                    att_source_to_hydrated,
+                    css_url_sub_dir,
                 )
                 messages_to_html(context, chat_details, msgs)
+
+            chat_to_file_path = network_to_chats.setdefault(network_name, {})
+            chat_to_file_path[chat_title] = output_file_path
+
+    write_chats_index(output_root_dir, css_url_sub_dir, network_to_chats)
 
 
 def get_all_messages():
@@ -325,7 +370,9 @@ def check_beeper_version():
             headers=REQUEST_HEADERS,
         )
     except requests.ConnectionError as ex:
-        print("Error connecting to Beeper, make sure the Beeper Desktop API is enabled.")
+        print(
+            "Error connecting to Beeper, make sure the Beeper Desktop API is enabled."
+        )
         fatal(repr(ex))
     resp.raise_for_status()
     beeper_version_str = resp.headers.get("X-Beeper-Desktop-Version")
@@ -356,7 +403,7 @@ async def main():
         att_source_to_hydrated = dict(zip(att_source_urls, att_hydrated_urls))
         dump_html(data, att_source_to_hydrated, args.output_root_dir)
     except KeyboardInterrupt:
-        fatal('Manually aborted')
+        fatal("Manually aborted")
 
 
 if __name__ == "__main__":

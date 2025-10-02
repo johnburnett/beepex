@@ -19,8 +19,13 @@ section.chat-header {
     border-radius: 5px;
 }
 
-section.chat-details {
-    color: var(--text-muted);
+details {
+    margin: 0px;
+    background-color: var(--chat-header-background);
+}
+
+details:not([open]) {
+    padding: 10px;
 }
 
 span.chat-details-label {
@@ -66,4 +71,8 @@ span.msg-datetime {
 
 span.msg-contact-name {
     font-weight: bold;
+}
+
+section.msg img {
+    border-radius: 5px;
 }
