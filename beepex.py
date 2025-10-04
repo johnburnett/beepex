@@ -170,7 +170,7 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
         f'<span class="msg-contact-name">{msg["senderName"]}</span>'
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
         f'<a class="permalink" title="Message {message_id}" href="#{message_id}">&#x1F517;&#xFE0E;'
-        f'</a></div>\n'
+        f"</a></div>\n"
     )
 
     if "text" in msg:
@@ -246,7 +246,10 @@ def messages_to_html(ctx: ExportContext, chat_details, msgs):
 def write_chats_index(output_root_dir, css_url_sub_dir, network_to_chats):
     index_file_path = os.path.join(output_root_dir, "index.html")
     with open(index_file_path, "w", encoding="utf-8") as fp:
+        hostname = socket.gethostname()
         now = datetime.now()
+        now_date = now.strftime("%Y-%m-%d")
+        now_time = now.strftime("%H:%M:%S")
         fp.write(
             f"<!DOCTYPE html>\n"
             f'<html lang="en">\n'
@@ -258,13 +261,19 @@ def write_chats_index(output_root_dir, css_url_sub_dir, network_to_chats):
             f"</head>\n"
             f"<body>\n"
             f"    <h1>Beeper Chats</h1>\n"
-            f'    <div style="color: var(--text-muted);">Exported from <span style="font-family: monospace;">{socket.gethostname()}</span> on {now.strftime('%Y-%m-%d')} at {now.strftime('%H:%M:%S')}</div>\n'
+            f'    <div style="color: var(--text-muted);">'
+            f'Exported from <span style="font-family: monospace;">{hostname}</span> on {now_date} at {now_time}'
+            f"</div>\n"
         )
         fp.write("<ul>\n")
-        for network_name, chat_to_file_path in sorted(network_to_chats.items(), key=lambda it: it[0].casefold()):
+        for network_name, chat_to_file_path in sorted(
+            network_to_chats.items(), key=lambda it: it[0].casefold()
+        ):
             fp.write(f"<li>{network_name}\n")
             fp.write("<ul>\n")
-            for chat_title, chat_file_path in sorted(chat_to_file_path.items(), key=lambda it: it[0].casefold()):
+            for chat_title, chat_file_path in sorted(
+                chat_to_file_path.items(), key=lambda it: it[0].casefold()
+            ):
                 chat_url = os.path.relpath(chat_file_path, start=output_root_dir)
                 if os.path.sep != "/":
                     chat_url = chat_url.replace("/", os.path.sep)
