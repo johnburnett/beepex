@@ -136,20 +136,25 @@ def get_attachment_urls(msgs):
     return urls
 
 
-def archive_attachment(attachment_dir_path, att_source_to_hydrated, msg, att):
+def archive_attachment(
+    attachment_dir_path, att_source_to_hydrated, time_sent: datetime, att
+):
     source_url = att["srcURL"]
     hydrated_url = att_source_to_hydrated[source_url]
     source_file_path = hydrated_url[len("file:///") :]
     if os.path.sep != "/":
         source_file_path = source_file_path.replace("/", os.path.sep)
     os.makedirs(attachment_dir_path, exist_ok=True)
+    time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att["fileName"])
     target_file_name = (
-        sanitize_file_name(f"{msg['timestamp']}_{target_file_name}") + target_file_ext
+        sanitize_file_name(f"{time_sent_str}_{target_file_name}") + target_file_ext
     )
     target_file_path = os.path.join(attachment_dir_path, target_file_name)
+    mtime = time_sent.timestamp()
     if not os.path.exists(target_file_path):
-        shutil.copy2(source_file_path, target_file_path)
+        shutil.copy(source_file_path, target_file_path)
+        os.utime(target_file_path, times=(mtime, mtime))
     return target_file_path
 
 
@@ -181,7 +186,7 @@ def message_to_html(ctx: ExportContext, chat_details, msg):
 
     for att in msg.get("attachments", []):
         att_file_path = archive_attachment(
-            ctx.attachment_dir_path, ctx.att_source_to_hydrated, msg, att
+            ctx.attachment_dir_path, ctx.att_source_to_hydrated, ts_local, att
         )
         att_url = os.path.relpath(
             att_file_path, start=os.path.dirname(ctx.output_file_path)
@@ -320,22 +325,26 @@ def dump_html(data, att_source_to_hydrated, output_root_dir):
             output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
             os.makedirs(output_dir_path, exist_ok=True)
 
-            output_file_path = os.path.join(output_dir_path, chat_title + ".html")
+            html_file_path = os.path.join(output_dir_path, chat_title + ".html")
             attachment_dir_path = os.path.join(
                 output_root_dir, "media", network_dir_name, chat_title
             )
-            with open(output_file_path, "w", encoding="utf-8") as fp:
+            with open(html_file_path, "w", encoding="utf-8") as fp:
                 context = ExportContext(
-                    output_file_path,
+                    html_file_path,
                     fp,
                     attachment_dir_path,
                     att_source_to_hydrated,
                     css_url_sub_dir,
                 )
                 messages_to_html(context, chat_details, msgs)
+            if msgs:
+                dt = datetime.fromisoformat(msgs[-1]["timestamp"]).astimezone()
+                mtime = dt.timestamp()
+                os.utime(html_file_path, times=(mtime, mtime))
 
             chat_to_file_path = network_to_chats.setdefault(network_name, {})
-            chat_to_file_path[chat_title] = output_file_path
+            chat_to_file_path[chat_title] = html_file_path
 
     write_chats_index(output_root_dir, css_url_sub_dir, network_to_chats)
 
