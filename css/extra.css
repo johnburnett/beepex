@@ -76,3 +76,12 @@ span.msg-contact-name {
 section.msg img {
     border-radius: 5px;
 }
+
+span.reactions {
+    display: flex;
+    background-color: var(--chat-header-background);
+    float: right;
+    margin-top: -5px;
+    border-radius: 5px;
+    border: 1px solid #ffffff;
+}

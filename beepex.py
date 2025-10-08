@@ -73,6 +73,18 @@ class Attachment:
 
 
 @dataclass
+class Reaction:
+    id: ReactionID
+    sender_id: UserID
+    key: str
+
+    def __init__(self, d: dict):
+        self.id = d["id"]
+        self.sender_id = d["participantID"]
+        self.key = d["reactionKey"]
+
+
+@dataclass
 class Message:
     id: MessageID
     timestamp: datetime
@@ -81,6 +93,7 @@ class Message:
     sender_id: UserID
     sender_name: str
     text: str | None
+    reactions: list[Reaction]
     attachments: list[Attachment]
 
     def __init__(self, d: dict):
@@ -91,6 +104,7 @@ class Message:
         self.sender_id = d["senderID"]
         self.sender_name = d.get("senderName", self.sender_id)
         self.text = d.get("text")
+        self.reactions = [Reaction(r) for r in d.get("reactions", [])]
         self.attachments = [Attachment(att) for att in d.get("attachments", [])]
 
 
@@ -172,6 +186,7 @@ class ExportContext:
     # Map attachment source_url to local hydrated file:/// URL
     att_source_to_hydrated: dict[str, str]
     css_url_sub_dir: str
+    users: dict[UserID, User]
 
 
 HE = html.escape
@@ -188,6 +203,13 @@ def sanitize_file_name(file_name: str) -> str:
     file_name = FILE_NAME_RESERVED_CHARS_RE.sub("", file_name)
     file_name = file_name.strip(" \t\n.")
     return file_name if file_name else "_"
+
+
+def get_users(chats: list[Chat]) -> dict[UserID, User]:
+    users = {}
+    for chat in chats:
+        users.update({user.id: user for user in chat.participants})
+    return users
 
 
 async def hydrate_attachment(url: str) -> str:
@@ -270,6 +292,7 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
         f'<a class="permalink" title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;'
         f"</a></div>\n"
+        f"<div>\n"
     )
 
     if msg.text:
@@ -304,6 +327,19 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
             )
         elif att.type == "audio":
             ctx.fout.write(f'<audio controls src="{att_url}"/>\n')
+
+    ctx.fout.write("</div>")
+
+    if msg.reactions:
+        ctx.fout.write('<span class="reactions">\n')
+        keys_to_names = defaultdict(list)
+        for reaction in msg.reactions:
+            name = ctx.users[reaction.sender_id].full_name
+            keys_to_names[reaction.key].append(name)
+        for key, names in sorted(keys_to_names.items()):
+            tooltip = f"{key}\n" + "\n".join(sorted(names))
+            ctx.fout.write(f'<div title="{HE(tooltip)}">{HE(key)}</div>')
+        ctx.fout.write("</span>\n")
 
     ctx.fout.write("</section>\n")
 
@@ -433,6 +469,7 @@ def write_html(
 ) -> None:
     css_url_sub_dir = copy_css_files(output_root_dir, "media")
     chat_id_to_html_path = {}
+    users = get_users(chats)
     with tqdm(chats, desc="Exporting chats") as progress:
         for chat in progress:
             chat_title = sanitize_file_name(f"{chat.full_title()} ({chat.id})")
@@ -454,6 +491,7 @@ def write_html(
                     attachment_dir_path,
                     att_source_to_hydrated,
                     css_url_sub_dir,
+                    users,
                 )
                 chat_to_html(context, chat)
             if chat.messages:
