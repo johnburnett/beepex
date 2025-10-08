@@ -14,7 +14,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=1.18.2",
     "pre-commit>=4.3.0",
     "ruff>=0.13.2",
     "ty>=0.0.1a21",
+    "types-bleach>=6.2.0.20250809",
+    "types-requests>=2.32.4.20250913",
+    "types-tqdm>=4.67.0.20250809",
 ]

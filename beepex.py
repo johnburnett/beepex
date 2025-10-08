@@ -11,7 +11,7 @@ import re
 import shutil
 import socket
 import sys
-from typing import NoReturn, Protocol, TextIO, TypeVar, Type
+from typing import Any, NewType, NoReturn, Protocol, TextIO, TypeVar, Type
 
 import bleach
 from packaging import version
@@ -48,6 +48,10 @@ class DictConstructible(Protocol):
 
 
 TDC = TypeVar("TDC", bound=DictConstructible)
+ChatID = NewType("ChatID", str)
+MessageID = NewType("MessageID", str)
+ReactionID = NewType("ReactionID", str)
+UserID = NewType("UserID", str)
 
 
 @dataclass
@@ -70,11 +74,11 @@ class Attachment:
 
 @dataclass
 class Message:
-    id: str
+    id: MessageID
     timestamp: datetime
     sort_key: str
     from_self: bool
-    sender_id: str
+    sender_id: UserID
     sender_name: str
     text: str | None
     attachments: list[Attachment]
@@ -92,7 +96,7 @@ class Message:
 
 @dataclass
 class User:
-    id: str
+    id: UserID
     full_name: str
     is_self: bool
 
@@ -104,7 +108,7 @@ class User:
 
 @dataclass
 class Chat:
-    id: str
+    id: ChatID
     account: str
     network: str
     title: str
@@ -145,7 +149,7 @@ class Chat:
             assert self._full_title
         return self._full_title
 
-    def _get_top_sender_ids(self, self_id: str, max_senders: int) -> list[str]:
+    def _get_top_sender_ids(self, self_id: str, max_senders: int) -> list[UserID]:
         # using defaultdict here because sometimes there are messages associated
         # with a chat that are sent by a user who isn't listed in the chat
         # participants.  We also prime the dict with all participants, because
@@ -363,10 +367,10 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
 def write_chats_index(
     output_root_dir: str,
     css_url_sub_dir: str,
-    chat_id_to_html_path: dict[str, str],
+    chat_id_to_html_path: dict[ChatID, str],
     chats: list[Chat],
 ):
-    network_to_chats = {}
+    network_to_chats: dict[str, list[Chat]] = {}
     for chat in chats:
         network_to_chats.setdefault(chat.network, []).append(chat)
 
@@ -470,7 +474,7 @@ def get_all_chats() -> list[Chat]:
     cursor = None
     with tqdm(desc="Gathering messages") as progress:
         while True:
-            params = {"limit": 20}  # 20 is the cap per page
+            params: dict[Any, Any] = {"limit": 20}  # 20 is the cap per page
             params["excludeLowPriority"] = False
             params["includeMuted"] = True
             if cursor:
@@ -562,9 +566,10 @@ def check_prerequisites() -> None:
         fatal(repr(ex))
     resp.raise_for_status()
     beeper_version_str = resp.headers.get("X-Beeper-Desktop-Version")
-    if not beeper_version_str:
+    if beeper_version_str:
+        beeper_version = version.parse(beeper_version_str)
+    else:
         fatal("Can't get Beeper desktop version")
-    beeper_version = version.parse(beeper_version_str)
     min_version = version.parse(BEEPER_MIN_VERSION)
     if beeper_version < min_version:
         fatal(
