@@ -170,6 +170,9 @@ class ExportContext:
     css_url_sub_dir: str
 
 
+HE = html.escape
+
+
 def fatal(msg: str) -> NoReturn:
     print(msg)
     sys.exit(1)
@@ -181,31 +184,6 @@ def sanitize_file_name(file_name: str) -> str:
     file_name = FILE_NAME_RESERVED_CHARS_RE.sub("", file_name)
     file_name = file_name.strip(" \t\n.")
     return file_name if file_name else "_"
-
-
-def chat_details_to_html(fout: TextIO, chat: Chat) -> None:
-    fout.write('<section class="chat-header">\n')
-    fout.write(f"<h1>{chat.full_title()}</h1>\n")
-    fout.write("<details>\n")
-    fout.write(
-        f'<div><span class="chat-details-label">Network: </span><span>{chat.network}</span></div>\n'
-    )
-    fout.write(
-        f'<div><span class="chat-details-label">Account ID: </span><span>{chat.account}</span></div>\n'
-    )
-    fout.write(
-        f'<div><span class="chat-details-label">Chat ID: </span><span>{chat.id}</span></div>\n'
-    )
-    fout.write(
-        f'<div><span class="chat-details-label">Message Count: </span><span>{len(chat.messages)}</span></div>\n'
-    )
-    fout.write('<div><span class="chat-details-label">Participants:</span></div>\n')
-    users = chat.participants
-    names = [user.full_name for user in users]
-    for name in sorted(names, key=lambda it: it.casefold()):
-        fout.write(f"<div>{name}</div>\n")
-    fout.write("</details>\n")
-    fout.write("</section>")
 
 
 async def hydrate_attachment(url: str) -> str:
@@ -283,10 +261,10 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
     ts_local_str = ts_local.strftime("%Y-%m-%d %H:%M:%S %Z")
     ctx.fout.write(
         f'<section class="msg {sec_class}">'
-        f'<div id="{msg.id}" class="msg-header">'
-        f'<span class="msg-contact-name">{msg.sender_name}</span>'
+        f'<div id="{HE(msg.id)}" class="msg-header">'
+        f'<span class="msg-contact-name">{HE(msg.sender_name)}</span>'
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
-        f'<a class="permalink" title="Message {msg.id}" href="#{msg.id}">&#x1F517;&#xFE0E;'
+        f'<a class="permalink" title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;'
         f"</a></div>\n"
     )
 
@@ -305,6 +283,7 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
         )
         if os.path.sep != "/":
             att_url = att_url.replace("\\", "/")
+        att_url = html.escape(att_url)
 
         dim_attr = (
             f' width="{att.resolution[0]}" height="{att.resolution[1]}"'
@@ -330,13 +309,14 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
         return
 
     css_dir = posixpath.join("../..", ctx.css_url_sub_dir)
+    css_dir = html.escape(css_dir)
     ctx.fout.write(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
         f'    <meta charset="UTF-8">\n'
         f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"    <title>Chat: {chat.full_title()}</title>\n"
+        f"    <title>Chat: {HE(chat.full_title())}</title>\n"
         f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
         f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
         f"</head>\n"
@@ -344,7 +324,32 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
     )
 
     ctx.fout.write("<header>\n")
-    chat_details_to_html(ctx.fout, chat)
+    ctx.fout.write('<section class="chat-header">\n')
+    ctx.fout.write(f"<h1>{HE(chat.full_title())}</h1>\n")
+    ctx.fout.write("<details>\n")
+    ctx.fout.write(
+        f'<div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
+    )
+    ctx.fout.write(
+        f'<div><span class="chat-details-label">Account ID: </span>{HE(chat.account)}</div>\n'
+    )
+    ctx.fout.write(
+        f'<div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
+    )
+    ctx.fout.write(
+        f'<div><span class="chat-details-label">Message Count: </span>{len(chat.messages)}</div>\n'
+    )
+    ctx.fout.write(
+        f'<div><span class="chat-details-label">Participants: </span>{len(chat.participants)}</div>\n'
+    )
+    users = chat.participants
+    names = [user.full_name for user in users]
+    ctx.fout.write("<ul>\n")
+    for name in sorted(names, key=lambda it: it.casefold()):
+        ctx.fout.write(f"<li>{HE(name)}</li>\n")
+    ctx.fout.write("</ul>\n")
+    ctx.fout.write("</details>\n")
+    ctx.fout.write("</section>")
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
@@ -378,12 +383,12 @@ def write_chats_index(
             f'    <meta charset="UTF-8">\n'
             f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f"    <title>Beeper Chats</title>\n"
-            f'    <link rel="stylesheet" href="{css_url_sub_dir}/water.css">\n'
+            f'    <link rel="stylesheet" href="{HE(css_url_sub_dir)}/water.css">\n'
             f"</head>\n"
             f"<body>\n"
             f"    <h1>Beeper Chats</h1>\n"
             f'    <div style="color: var(--text-muted);">'
-            f'Exported from <span style="font-family: monospace;">{hostname}</span> on {now_date} at {now_time}'
+            f'Exported from <span style="font-family: monospace;">{HE(hostname)}</span> on {now_date} at {now_time}'
             f"</div>\n"
         )
         fp.write("<ul>\n")
@@ -399,7 +404,7 @@ def write_chats_index(
                 chat_url = os.path.relpath(chat_html_path, start=output_root_dir)
                 if os.path.sep != "/":
                     chat_url = chat_url.replace("/", os.path.sep)
-                fp.write(f'<li><a href="{chat_url}">{chat.full_title()}</a></li>\n')
+                fp.write(f'<li><a href="{chat_url}">{HE(chat.full_title())}</a></li>\n')
             fp.write("</ul>\n")
             fp.write("</li>\n")
         fp.write("</ul>\n")
