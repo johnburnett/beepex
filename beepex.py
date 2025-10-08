@@ -11,7 +11,7 @@ import re
 import shutil
 import socket
 import sys
-from typing import NoReturn, TextIO
+from typing import NoReturn, Protocol, TextIO, TypeVar, Type
 
 import bleach
 from packaging import version
@@ -43,6 +43,13 @@ FILE_NAME_RESERVED_NAMES = {
 FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
 
 
+class DictConstructible(Protocol):
+    def __init__(self, data: dict) -> None: ...
+
+
+TDC = TypeVar("TDC", bound=DictConstructible)
+
+
 @dataclass
 class Attachment:
     type: str
@@ -66,7 +73,7 @@ class Message:
     id: str
     timestamp: datetime
     sort_key: str
-    self_sender: bool
+    from_self: bool
     sender_id: str
     sender_name: str
     text: str | None
@@ -76,7 +83,7 @@ class Message:
         self.id = d["messageID"]
         self.timestamp = datetime.fromisoformat(d["timestamp"])
         self.sort_key = d["sortKey"]
-        self.self_sender = d.get("isSender", False)
+        self.from_self = d.get("isSender", False)
         self.sender_id = d["senderID"]
         self.sender_name = d.get("senderName", self.sender_id)
         self.text = d.get("text")
@@ -96,12 +103,15 @@ class User:
 
 
 @dataclass
-class ChatDetails:
+class Chat:
     id: str
     account: str
     network: str
     title: str
     participants: list[User]
+
+    messages: list[Message] = field(default_factory=list)
+    _full_title: str | None = None
 
     def __init__(self, d: dict):
         self.id = d["id"]
@@ -111,46 +121,36 @@ class ChatDetails:
         # todo: may not be full list of users? (d["participants"]["hasMore"])
         self.participants = [User(it) for it in d["participants"]["items"]]
 
+    def full_title(self) -> str:
+        if not self._full_title:
+            self_user = None
+            for ii in range(len(self.participants)):
+                if self.participants[ii].is_self:
+                    self_user = self.participants[ii]
+                    break
 
-@dataclass
-class Chat:
-    details: ChatDetails
-    messages: list[Message] = field(default_factory=list)
-    _title: str | None = None
+            if self_user and self.title == self_user.full_name:
+                max_senders_in_title = 4
+                top_sender_ids = self._get_top_sender_ids(
+                    self_user.id, max_senders_in_title
+                )
+                id_to_name = {user.id: user.full_name for user in self.participants}
+                # Note: participants list doesn't include all participants?
+                # e.g. '@discordgobot:beeper.local' has been seen sending a message
+                # with this chat's chat_id, but it isn't in the returned chat participant list).
+                top_sender_names = [id_to_name.get(id, id) for id in top_sender_ids]
+                self._full_title = ", ".join(top_sender_names)
+            else:
+                self._full_title = self.title
+            assert self._full_title
+        return self._full_title
 
-    def get_title(self) -> str:
-        if not self._title:
-            self._compute_title()
-        return self._title
-
-    def _compute_title(self) -> None:
-        self_user = None
-        for ii in range(len(self.details.participants)):
-            if self.details.participants[ii].is_self:
-                self_user = self.details.participants[ii]
-                break
-
-        if self_user and self.details.title == self_user.full_name:
-            max_senders_in_title = 4
-            top_sender_ids = self.get_top_sender_ids(self_user.id, max_senders_in_title)
-            id_to_name = {user.id: user.full_name for user in self.details.participants}
-            # Note: participants list doesn't include all participants?
-            # e.g. '@discordgobot:beeper.local' has been seen sending a message
-            # with this chat's chat_id, but it isn't in the returned chat participant list).
-            top_sender_names = [id_to_name.get(id, id) for id in top_sender_ids]
-            self._title = ", ".join(top_sender_names)
-        else:
-            self._title = self.details.title
-        assert self._title
-
-    def get_top_sender_ids(self, self_id: str, max_senders: int) -> list[str]:
+    def _get_top_sender_ids(self, self_id: str, max_senders: int) -> list[str]:
         # using defaultdict here because sometimes there are messages associated
         # with a chat that are sent by a user who isn't listed in the chat
         # participants.  We also prime the dict with all participants, because
         # listed participants haven't always sent messages.
-        sent_histogram = defaultdict(int)
-        for user in self.details.participants:
-            sent_histogram[user.id] = 0
+        sent_histogram = defaultdict(int, ((user.id, 0) for user in self.participants))
         for msg in self.messages:
             sent_histogram[msg.sender_id] += 1
         sorted_senders = sorted(sent_histogram.items(), key=lambda it: it[1])
@@ -185,19 +185,22 @@ def sanitize_file_name(file_name: str) -> str:
 
 def chat_details_to_html(fout: TextIO, chat: Chat) -> None:
     fout.write('<section class="chat-header">\n')
-    fout.write(f"<h1>{chat.get_title()}</h1>\n")
+    fout.write(f"<h1>{chat.full_title()}</h1>\n")
     fout.write("<details>\n")
     fout.write(
-        f'<div><span class="chat-details-label">Network: </span><span>{chat.details.network}</span></div>\n'
+        f'<div><span class="chat-details-label">Network: </span><span>{chat.network}</span></div>\n'
     )
     fout.write(
-        f'<div><span class="chat-details-label">Account ID: </span><span>{chat.details.account}</span></div>\n'
+        f'<div><span class="chat-details-label">Account ID: </span><span>{chat.account}</span></div>\n'
     )
     fout.write(
-        f'<div><span class="chat-details-label">Chat ID: </span><span>{chat.details.id}</span></div>\n'
+        f'<div><span class="chat-details-label">Chat ID: </span><span>{chat.id}</span></div>\n'
+    )
+    fout.write(
+        f'<div><span class="chat-details-label">Message Count: </span><span>{len(chat.messages)}</span></div>\n'
     )
     fout.write('<div><span class="chat-details-label">Participants:</span></div>\n')
-    users = chat.details.participants
+    users = chat.participants
     names = [user.full_name for user in users]
     for name in sorted(names, key=lambda it: it.casefold()):
         fout.write(f"<div>{name}</div>\n")
@@ -273,7 +276,7 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
     # ctx.fout.write(f'<section><pre>{pformat(msg)}</pre></section>\n')
     # return
 
-    sec_class = "msg-self" if msg.self_sender else "msg-them"
+    sec_class = "msg-self" if msg.from_self else "msg-them"
     ts_utc = msg.timestamp
     ts_local = ts_utc.astimezone()
     ts_utc_str = ts_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -333,7 +336,7 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
         f"<head>\n"
         f'    <meta charset="UTF-8">\n'
         f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"    <title>Chat: {chat.get_title()}</title>\n"
+        f"    <title>Chat: {chat.full_title()}</title>\n"
         f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
         f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
         f"</head>\n"
@@ -360,7 +363,7 @@ def write_chats_index(
 ):
     network_to_chats = {}
     for chat in chats:
-        network_to_chats.setdefault(chat.details.network, []).append(chat)
+        network_to_chats.setdefault(chat.network, []).append(chat)
 
     index_file_path = os.path.join(output_root_dir, "index.html")
     with open(index_file_path, "w", encoding="utf-8") as fp:
@@ -390,13 +393,13 @@ def write_chats_index(
             fp.write(f"<li>{network_name}\n")
             fp.write("<ul>\n")
             for chat in sorted(
-                network_chats, key=lambda chat: chat.get_title().casefold()
+                network_chats, key=lambda chat: chat.full_title().casefold()
             ):
-                chat_html_path = chat_id_to_html_path[chat.details.id]
+                chat_html_path = chat_id_to_html_path[chat.id]
                 chat_url = os.path.relpath(chat_html_path, start=output_root_dir)
                 if os.path.sep != "/":
                     chat_url = chat_url.replace("/", os.path.sep)
-                fp.write(f'<li><a href="{chat_url}">{chat.get_title()}</a></li>\n')
+                fp.write(f'<li><a href="{chat_url}">{chat.full_title()}</a></li>\n')
             fp.write("</ul>\n")
             fp.write("</li>\n")
         fp.write("</ul>\n")
@@ -423,11 +426,11 @@ def write_html(
     chat_id_to_html_path = {}
     with tqdm(chats, desc="Exporting chats") as progress:
         for chat in progress:
-            chat_title = sanitize_file_name(f"{chat.get_title()} ({chat.details.id})")
+            chat_title = sanitize_file_name(f"{chat.full_title()} ({chat.id})")
             progress.set_description(f'Exporting chat "{chat_title}"')
             chat.messages.sort(key=lambda chat: chat.sort_key)
 
-            network_dir_name = sanitize_file_name(chat.details.network.lower())
+            network_dir_name = sanitize_file_name(chat.network.lower())
             output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
             os.makedirs(output_dir_path, exist_ok=True)
 
@@ -448,7 +451,7 @@ def write_html(
                 mtime = chat.messages[-1].timestamp.astimezone().timestamp()
                 os.utime(html_file_path, times=(mtime, mtime))
 
-            chat_id = chat.details.id
+            chat_id = chat.id
             assert chat_id not in chat_id_to_html_path
             chat_id_to_html_path[chat_id] = html_file_path
 
@@ -456,7 +459,7 @@ def write_html(
 
 
 def get_all_chats() -> list[Chat]:
-    chat_id_to_details: dict[str, ChatDetails] = {}
+    chat_id_to_chats: dict[str, Chat] = {}
     chat_id_to_messages: dict[str, list[Message]] = {}
 
     cursor = None
@@ -478,7 +481,7 @@ def get_all_chats() -> list[Chat]:
             data = resp.json()
 
             for chat_id, details in data.get("chats").items():
-                chat_id_to_details[chat_id] = ChatDetails(details)
+                chat_id_to_chats[chat_id] = Chat(details)
 
             for msg in data.get("items", []):
                 chat_id_to_messages.setdefault(msg["chatID"], []).append(Message(msg))
@@ -488,10 +491,53 @@ def get_all_chats() -> list[Chat]:
             cursor = data["oldestCursor"]
             progress.update()
 
+    messages_with_no_chat = set(chat_id_to_messages.keys()) - set(
+        chat_id_to_chats.keys()
+    )
+    assert not messages_with_no_chat
+
     chats = []
-    for chat_id, details in chat_id_to_details.items():
-        messages = chat_id_to_messages.get(chat_id, [])
-        chats.append(Chat(details, messages))
+    for chat_id, chat in chat_id_to_chats.items():
+        chat.messages = chat_id_to_messages.get(chat_id, [])
+        chats.append(chat)
+    return chats
+
+
+def get_beeper_items(
+    progress_text: str, endpoint: str, params: dict, item_type: Type[TDC]
+) -> list[TDC]:
+    items = []
+    cursor = None
+    params = params.copy()
+    with tqdm(desc=progress_text, leave=False) as progress:
+        while True:
+            if cursor:
+                params["cursor"] = cursor
+                params["direction"] = "before"
+            resp = requests.get(
+                f"{BEEPER_HOST_URL}/v0/{endpoint}",
+                headers=REQUEST_HEADERS,
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items.extend(data["items"])
+            if not data.get("hasMore") or not data.get("oldestCursor"):
+                break
+            cursor = data["oldestCursor"]
+            progress.update()
+    return items
+
+
+def get_all_chats2() -> list[Chat]:
+    chats = get_beeper_items("Gathering chats", "list-chats", {"limit": 200}, Chat)
+    for chat in tqdm(chats, desc="Gathering chat messages", leave=False):
+        chat.messages = get_beeper_items(
+            f'Chat "{chat.id}"',
+            "list-messages",
+            {"limit": 500, "chatID": chat.id},
+            Message,
+        )
     return chats
 
 
