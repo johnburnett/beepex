@@ -397,7 +397,7 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
         message_to_html(ctx, msg)
     ctx.fout.write("</main>\n")
 
-    ctx.fout.write("</body></html>")
+    ctx.fout.write("</body></html>\n")
 
 
 def write_chats_index(
@@ -448,7 +448,7 @@ def write_chats_index(
             fp.write("</ul>\n")
             fp.write("</li>\n")
         fp.write("</ul>\n")
-        fp.write("</body></html>")
+        fp.write("</body></html>\n")
 
 
 def copy_css_files(output_root_dir_path: str, data_dir_name: str) -> str:
@@ -615,6 +615,35 @@ def check_prerequisites() -> None:
         )
 
 
+def create_example():
+    import json
+    import shutil
+
+    this_dir_path = os.path.abspath(os.path.dirname(__file__))
+    output_root_dir = os.path.join(this_dir_path, "example")
+    shutil.rmtree(output_root_dir)
+
+    with open("test/chat.json", encoding="utf-8") as fp:
+        data = json.load(fp)
+    chat = Chat(data["chat"])
+    chat.messages = [Message(msg) for msg in data["messages"]]
+    example_png_path = "file:///test/goodgood.png"
+
+    write_html([chat], {example_png_path: example_png_path}, output_root_dir)
+
+    index_html_path = os.path.join(output_root_dir, "index.html")
+    with open(index_html_path, encoding="utf-8") as fp:
+        output_html = fp.read()
+    output_html = re.sub(
+        r'monospace;">.*</span> on \d\d\d\d-\d\d-\d\d at \d\d:\d\d:\d\d</div>',
+        r'monospace;">circusmonkey</span> on 2025-09-07 at 23:12:06</div>',
+        output_html,
+        count=1,
+    )
+    with open(index_html_path, "w", encoding="utf-8") as fp:
+        fp.write(output_html)
+
+
 async def main():
     try:
         check_prerequisites()
@@ -631,4 +660,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if len(sys.argv) == 2 and sys.argv[1] == "--create-example":
+        create_example()
+    else:
+        asyncio.run(main())

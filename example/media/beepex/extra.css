@@ -1,0 +1,87 @@
+:root {
+    --chat-header-background: rgb(212 255 220);
+    --msg-self-background: rgb(206 222 255);
+    --msg-them-background: rgb(220 220 220);
+}
+
+@media (prefers-color-scheme: dark) {
+:root {
+    --chat-header-background: rgb(75 97 79);
+    --msg-self-background: rgb(92 102 121);
+    --msg-them-background: rgb(82 82 82);
+}
+}
+
+section.chat-header {
+    background-color: var(--chat-header-background);
+    margin-bottom: 1rem;
+    padding: 0.5rem;
+    border-radius: 5px;
+}
+
+details {
+    margin: 0px;
+    background-color: var(--chat-header-background);
+}
+
+details:not([open]) {
+    padding: 10px;
+}
+
+span.chat-details-label {
+    font-weight: bold;
+}
+
+h1 {
+    margin: 0px;
+}
+
+h2 {
+    margin: 5px 0px;
+}
+
+section.msg {
+    margin-bottom: 1rem;
+    width: 66%;
+    padding: 0.5rem;
+    border-radius: 5px;
+}
+
+section.msg-self {
+    margin-left: 32%;
+    background-color: var(--msg-self-background);
+}
+
+section.msg-them {
+    background-color: var(--msg-them-background);
+}
+
+div.msg-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+span.msg-datetime {
+    font-size: 75%;
+    color: var(--text-muted);
+    margin-left: auto;
+    margin-right: 0.5rem;
+}
+
+span.msg-contact-name {
+    font-weight: bold;
+}
+
+section.msg img {
+    border-radius: 5px;
+}
+
+span.reactions {
+    display: flex;
+    background-color: var(--chat-header-background);
+    float: right;
+    margin-top: -5px;
+    border-radius: 5px;
+    border: 1px solid #ffffff;
+}
