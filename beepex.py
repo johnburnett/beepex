@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import html
 import os
-import posixpath
+from pathlib import Path
 import re
-import shutil
 import socket
 import sys
 from typing import Any, NewType, NoReturn, Protocol, TextIO, TypeVar, Type
@@ -180,12 +179,12 @@ class Chat:
 
 @dataclass
 class ExportContext:
-    output_file_path: str
+    output_file_path: Path
     fout: TextIO
-    attachment_dir_path: str
-    # Map attachment source_url to local hydrated file:/// URL
-    att_source_to_hydrated: dict[str, str]
-    css_url_sub_dir: str
+    attachment_dir_path: Path
+    # Map attachment source_url (which may not exist locally) to local hydrated file path
+    att_source_to_hydrated: dict[str, Path]
+    resource_dir_path: Path
     users: dict[UserID, User]
 
 
@@ -212,7 +211,7 @@ def get_users(chats: list[Chat]) -> dict[UserID, User]:
     return users
 
 
-async def hydrate_attachment(url: str) -> str:
+async def hydrate_attachment(url: str) -> Path:
     """Make Beeper download a cached copy of the attachment.
 
     Returns the file:/// URL of the attachment in Beeper's local cache.
@@ -227,50 +226,47 @@ async def hydrate_attachment(url: str) -> str:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["srcURL"]
+            hydrated_url = data["srcURL"]
         else:
-            return url
+            hydrated_url = url
+        assert hydrated_url.startswith("file://")
+        return Path.from_uri(hydrated_url)
 
     return await asyncio.to_thread(_sync, url)
 
 
-async def hydrate_attachments(chats: list[Chat]) -> dict[str, str]:
+async def hydrate_attachments(chats: list[Chat]) -> dict[str, Path]:
     source_urls = []
     for chat in chats:
         for msg in chat.messages:
             for att in msg.attachments:
                 source_urls.append(att.source_url)
     tasks = [hydrate_attachment(url) for url in source_urls]
-    hydrated_urls = await tqdm_asyncio.gather(
+    hydrated_paths = await tqdm_asyncio.gather(
         *tasks, total=len(tasks), desc="Downloading attachments"
     )
-    assert len(source_urls) == len(hydrated_urls)
-    for url in hydrated_urls:
-        assert url.startswith("file:///")
-    source_to_hydrated = dict(zip(source_urls, hydrated_urls))
+    assert len(source_urls) == len(hydrated_paths)
+    source_to_hydrated = dict(zip(source_urls, hydrated_paths))
     return source_to_hydrated
 
 
 def archive_attachment(
-    attachment_dir_path: str,
-    att_source_to_hydrated: dict[str, str],
+    attachment_dir_path: Path,
+    att_source_to_hydrated: dict[str, Path],
     time_sent: datetime,
     att: Attachment,
-) -> str:
-    hydrated_url = att_source_to_hydrated[att.source_url]
-    source_file_path = hydrated_url[len("file:///") :]
-    if os.path.sep != "/":
-        source_file_path = source_file_path.replace("/", os.path.sep)
-    os.makedirs(attachment_dir_path, exist_ok=True)
+) -> Path:
+    source_file_path = att_source_to_hydrated[att.source_url]
+    attachment_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att.file_name)
     target_file_name = (
         sanitize_file_name(f"{time_sent_str}_{target_file_name}") + target_file_ext
     )
-    target_file_path = os.path.join(attachment_dir_path, target_file_name)
+    target_file_path = attachment_dir_path / target_file_name
     mtime = time_sent.timestamp()
-    if not os.path.exists(target_file_path):
-        shutil.copy(source_file_path, target_file_path)
+    if not target_file_path.exists():
+        source_file_path.copy(target_file_path)
         os.utime(target_file_path, times=(mtime, mtime))
     return target_file_path
 
@@ -305,11 +301,9 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
         att_file_path = archive_attachment(
             ctx.attachment_dir_path, ctx.att_source_to_hydrated, ts_local, att
         )
-        att_url = os.path.relpath(
-            att_file_path, start=os.path.dirname(ctx.output_file_path)
-        )
-        if os.path.sep != "/":
-            att_url = att_url.replace("\\", "/")
+        att_url = att_file_path.relative_to(
+            ctx.output_file_path.parent, walk_up=True
+        ).as_posix()
         att_url = html.escape(att_url)
 
         dim_attr = (
@@ -348,8 +342,11 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
     if not chat.messages:
         return
 
-    css_dir = posixpath.join("../..", ctx.css_url_sub_dir)
-    css_dir = html.escape(css_dir)
+    css_dir = html.escape(
+        ctx.resource_dir_path.relative_to(
+            ctx.output_file_path.parent, walk_up=True
+        ).as_posix()
+    )
     ctx.fout.write(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
@@ -401,17 +398,18 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
 
 
 def write_chats_index(
-    output_root_dir: str,
-    css_url_sub_dir: str,
-    chat_id_to_html_path: dict[ChatID, str],
+    output_root_dir: Path,
+    resource_dir_path: Path,
+    chat_id_to_html_path: dict[ChatID, Path],
     chats: list[Chat],
-):
+) -> None:
     network_to_chats: dict[str, list[Chat]] = {}
     for chat in chats:
         network_to_chats.setdefault(chat.network, []).append(chat)
 
-    index_file_path = os.path.join(output_root_dir, "index.html")
+    index_file_path = output_root_dir / "index.html"
     with open(index_file_path, "w", encoding="utf-8") as fp:
+        css_dir = resource_dir_path.relative_to(output_root_dir).as_posix()
         hostname = socket.gethostname()
         now = datetime.now()
         now_date = now.strftime("%Y-%m-%d")
@@ -423,7 +421,7 @@ def write_chats_index(
             f'    <meta charset="UTF-8">\n'
             f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f"    <title>Beeper Chats</title>\n"
-            f'    <link rel="stylesheet" href="{HE(css_url_sub_dir)}/water.css">\n'
+            f'    <link rel="stylesheet" href="{HE(css_dir)}/water.css">\n'
             f"</head>\n"
             f"<body>\n"
             f"    <h1>Beeper Chats</h1>\n"
@@ -441,33 +439,31 @@ def write_chats_index(
                 network_chats, key=lambda chat: chat.full_title().casefold()
             ):
                 chat_html_path = chat_id_to_html_path[chat.id]
-                chat_url = os.path.relpath(chat_html_path, start=output_root_dir)
-                if os.path.sep != "/":
-                    chat_url = chat_url.replace("/", os.path.sep)
-                fp.write(f'<li><a href="{chat_url}">{HE(chat.full_title())}</a></li>\n')
+                chat_url = chat_html_path.relative_to(output_root_dir)
+                fp.write(
+                    f'<li><a href="{chat_url.as_posix()}">{HE(chat.full_title())}</a></li>\n'
+                )
             fp.write("</ul>\n")
             fp.write("</li>\n")
         fp.write("</ul>\n")
         fp.write("</body></html>\n")
 
 
-def copy_css_files(output_root_dir_path: str, data_dir_name: str) -> str:
-    source_dir_path = os.path.join(os.path.dirname(__name__), "css")
-    assert os.path.isdir(source_dir_path)
-    css_url_sub_dir = posixpath.join(data_dir_name, "beepex")
-    target_dir_path = os.path.join(output_root_dir_path, css_url_sub_dir)
-    os.makedirs(target_dir_path, exist_ok=True)
+def copy_resource_files(target_dir_path: Path) -> Path:
+    source_dir_path = Path(__name__).parent / "css"
+    assert source_dir_path.is_dir()
+    target_dir_path.mkdir(parents=True, exist_ok=True)
     for file_name in ("water.css", "extra.css"):
-        source_file_path = os.path.join(source_dir_path, file_name)
-        target_file_path = os.path.join(target_dir_path, file_name)
-        shutil.copy(source_file_path, target_file_path)
-    return css_url_sub_dir
+        source_file_path = source_dir_path / file_name
+        target_file_path = target_dir_path / file_name
+        source_file_path.copy(target_file_path)
+    return target_dir_path
 
 
 def write_html(
-    chats: list[Chat], att_source_to_hydrated: dict[str, str], output_root_dir: str
+    chats: list[Chat], att_source_to_hydrated: dict[str, Path], output_root_dir: Path
 ) -> None:
-    css_url_sub_dir = copy_css_files(output_root_dir, "media")
+    resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
     chat_id_to_html_path = {}
     users = get_users(chats)
     with tqdm(chats, desc="Exporting chats") as progress:
@@ -477,12 +473,12 @@ def write_html(
             chat.messages.sort(key=lambda chat: chat.sort_key)
 
             network_dir_name = sanitize_file_name(chat.network.lower())
-            output_dir_path = os.path.join(output_root_dir, "chats", network_dir_name)
-            os.makedirs(output_dir_path, exist_ok=True)
+            output_dir_path = output_root_dir / "chats" / network_dir_name
+            output_dir_path.mkdir(parents=True, exist_ok=True)
 
-            html_file_path = os.path.join(output_dir_path, chat_title + ".html")
-            attachment_dir_path = os.path.join(
-                output_root_dir, "media", network_dir_name, chat_title
+            html_file_path = output_dir_path / (chat_title + ".html")
+            attachment_dir_path = (
+                output_root_dir / "media" / network_dir_name / chat_title
             )
             with open(html_file_path, "w", encoding="utf-8") as fp:
                 context = ExportContext(
@@ -490,7 +486,7 @@ def write_html(
                     fp,
                     attachment_dir_path,
                     att_source_to_hydrated,
-                    css_url_sub_dir,
+                    resource_dir_path,
                     users,
                 )
                 chat_to_html(context, chat)
@@ -502,7 +498,7 @@ def write_html(
             assert chat_id not in chat_id_to_html_path
             chat_id_to_html_path[chat_id] = html_file_path
 
-    write_chats_index(output_root_dir, css_url_sub_dir, chat_id_to_html_path, chats)
+    write_chats_index(output_root_dir, resource_dir_path, chat_id_to_html_path, chats)
 
 
 def get_all_chats() -> list[Chat]:
@@ -619,19 +615,20 @@ def create_example():
     import json
     import shutil
 
-    this_dir_path = os.path.abspath(os.path.dirname(__file__))
-    output_root_dir = os.path.join(this_dir_path, "example")
-    shutil.rmtree(output_root_dir)
+    this_dir_path = Path(__file__).parent
+    output_root_dir = this_dir_path / "example"
+    if output_root_dir.exists():
+        shutil.rmtree(output_root_dir)
 
     with open("test/chat.json", encoding="utf-8") as fp:
         data = json.load(fp)
     chat = Chat(data["chat"])
     chat.messages = [Message(msg) for msg in data["messages"]]
-    example_png_path = "file:///test/goodgood.png"
+    example_png_path = this_dir_path / "test" / "goodgood.png"
 
-    write_html([chat], {example_png_path: example_png_path}, output_root_dir)
+    write_html([chat], {"file:///test/goodgood.png": example_png_path}, output_root_dir)
 
-    index_html_path = os.path.join(output_root_dir, "index.html")
+    index_html_path = output_root_dir / "index.html"
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
     output_html = re.sub(
@@ -649,7 +646,7 @@ async def main():
         check_prerequisites()
 
         parser = argparse.ArgumentParser()
-        parser.add_argument("output_root_dir")
+        parser.add_argument("output_root_dir", type=Path)
         args = parser.parse_args()
 
         chats = get_all_chats()
