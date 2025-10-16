@@ -27,10 +27,14 @@ traceback.install(
     width=160,
 )
 
-BEEPER_MIN_VERSION = "4.1.244"
-BEEPER_HOST_URL = "http://localhost:23373/"
-BEEPER_ACCESS_TOKEN = os.environ.get("BEEPER_ACCESS_TOKEN")
-REQUEST_HEADERS = {"Authorization": f"Bearer {BEEPER_ACCESS_TOKEN}"}
+
+@dataclass(frozen=True, kw_only=True)
+class Config:
+    beeper_min_version = "4.1.294"
+    host_url = "http://localhost:23373"
+    access_token: str
+    request_headers: dict[str, str]
+
 
 # fmt: off
 FILE_NAME_RESERVED_NAMES = {
@@ -40,6 +44,29 @@ FILE_NAME_RESERVED_NAMES = {
 }
 # fmt: on
 FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
+
+CONFIG: Config | None = None
+
+
+def cfg() -> Config:
+    assert CONFIG
+    return CONFIG
+
+
+def init_cfg(args) -> None:
+    global CONFIG
+    assert CONFIG is None
+    if args.token:
+        access_token = args.token
+    else:
+        access_token = os.environ.get("BEEPER_ACCESS_TOKEN")
+    if not access_token:
+        fatal(
+            "Access token not provided via command line or BEEPER_ACCESS_TOKEN environment variable."
+        )
+    assert isinstance(access_token, str)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    CONFIG = Config(access_token=access_token, request_headers=headers)
 
 
 class DictConstructible(Protocol):
@@ -220,8 +247,8 @@ async def hydrate_attachment(url: str) -> Path:
     def _sync(url):
         if url.startswith("mxc://"):
             resp = requests.post(
-                f"{BEEPER_HOST_URL}/v0/download-asset",
-                headers=REQUEST_HEADERS,
+                f"{cfg().host_url}/v0/download-asset",
+                headers=cfg().request_headers,
                 json={"url": url},
             )
             resp.raise_for_status()
@@ -516,8 +543,8 @@ def get_all_chats() -> list[Chat]:
                 params["direction"] = "before"
 
             resp = requests.get(
-                f"{BEEPER_HOST_URL}/v0/search-messages",
-                headers=REQUEST_HEADERS,
+                f"{cfg().host_url}/v0/search-messages",
+                headers=cfg().request_headers,
                 params=params,
             )
             resp.raise_for_status()
@@ -558,8 +585,8 @@ def get_beeper_items(
                 params["cursor"] = cursor
                 params["direction"] = "before"
             resp = requests.get(
-                f"{BEEPER_HOST_URL}/v0/{endpoint}",
-                headers=REQUEST_HEADERS,
+                f"{cfg().host_url}/v0/{endpoint}",
+                headers=cfg().request_headers,
                 params=params,
             )
             resp.raise_for_status()
@@ -584,14 +611,11 @@ def get_all_chats2() -> list[Chat]:
     return chats
 
 
-def check_prerequisites() -> None:
-    if not BEEPER_ACCESS_TOKEN:
-        fatal("BEEPER_ACCESS_TOKEN environment variable not set.")
-
+def check_beeper_version() -> None:
     try:
         resp = requests.get(
-            f"{BEEPER_HOST_URL}/oauth/userinfo",
-            headers=REQUEST_HEADERS,
+            f"{cfg().host_url}/oauth/userinfo",
+            headers=cfg().request_headers,
         )
     except requests.ConnectionError as ex:
         print(
@@ -604,7 +628,7 @@ def check_prerequisites() -> None:
         beeper_version = version.parse(beeper_version_str)
     else:
         fatal("Can't get Beeper desktop version")
-    min_version = version.parse(BEEPER_MIN_VERSION)
+    min_version = version.parse(cfg().beeper_min_version)
     if beeper_version < min_version:
         fatal(
             f"Installed Beeper {beeper_version} is too old, version {min_version} is required."
@@ -643,11 +667,16 @@ def create_example():
 
 async def main():
     try:
-        check_prerequisites()
-
         parser = argparse.ArgumentParser()
         parser.add_argument("output_root_dir", type=Path)
+        parser.add_argument(
+            "--token",
+            help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable.",
+        )
         args = parser.parse_args()
+
+        init_cfg(args)
+        check_beeper_version()
 
         chats = get_all_chats()
         att_source_to_hydrated = await hydrate_attachments(chats)
