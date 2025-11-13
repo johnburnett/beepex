@@ -2,16 +2,19 @@
 import argparse
 import asyncio
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 import html
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import sys
-from typing import Any, NewType, NoReturn, Protocol, TextIO, TypeVar, Type
+from typing import NoReturn, TextIO
 
+from beeper_desktop_api import AsyncBeeperDesktop
+from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
 from packaging import version
 import requests
@@ -69,139 +72,70 @@ def init_cfg(args) -> None:
     CONFIG = Config(access_token=access_token, request_headers=headers)
 
 
-class DictConstructible(Protocol):
-    def __init__(self, data: dict) -> None: ...
+def get_user_name(user: User) -> str:
+    attr_names = (
+        "full_name",
+        "username",
+        "email",
+        "phone_number",
+        "id",
+    )
+    for attr_name in attr_names:
+        value = getattr(user, attr_name)
+        if value:
+            return value
+    assert False
 
 
-TDC = TypeVar("TDC", bound=DictConstructible)
-ChatID = NewType("ChatID", str)
-MessageID = NewType("MessageID", str)
-ReactionID = NewType("ReactionID", str)
-UserID = NewType("UserID", str)
+def get_chat_top_sender_ids(
+    chat: Chat, messages: list[Message], self_id: str, max_senders: int
+) -> list[str]:
+    # using defaultdict here because sometimes there are messages associated
+    # with a chat that are sent by a user who isn't listed in the chat
+    # participants.  We also prime the dict with all participants, because
+    # listed participants haven't always sent messages.
+    sent_histogram = defaultdict(
+        int, ((user.id, 0) for user in chat.participants.items)
+    )
+    for msg in messages:
+        sent_histogram[msg.sender_id] += 1
+    sorted_senders = sorted(sent_histogram.items(), key=lambda it: it[1])
+    top_senders = [id for id, _ in filter(lambda it: it[0] != self_id, sorted_senders)][
+        :max_senders
+    ]
+    return top_senders
 
 
-@dataclass
-class Attachment:
-    type: str
-    source_url: str
-    file_name: str
-    resolution: tuple[int, int] | None
+def get_chat_title(chat: Chat, messages: list[Message]) -> str:
+    self_user = None
+    for ii in range(len(chat.participants.items)):
+        if chat.participants.items[ii].is_self:
+            self_user = chat.participants.items[ii]
+            break
 
-    def __init__(self, d: dict):
-        self.type = d["type"]
-        self.source_url = d["srcURL"]
-        self.file_name = d.get("fileName", "")
-        self.resolution = None
-        if size := d.get("size"):
-            self.resolution = (size["width"], size["height"])
-        # if self.type not in ("img", "video", "audio"):
-        #     print(self)
-
-
-@dataclass
-class Reaction:
-    id: ReactionID
-    sender_id: UserID
-    key: str
-
-    def __init__(self, d: dict):
-        self.id = d["id"]
-        self.sender_id = d["participantID"]
-        self.key = d["reactionKey"]
+    full_title = chat.title
+    if self_user and chat.title == self_user.full_name:
+        max_senders_in_title = 4
+        top_sender_ids = get_chat_top_sender_ids(
+            chat, messages, self_user.id, max_senders_in_title
+        )
+        id_to_name = {user.id: user.full_name for user in chat.participants.items}
+        # Note: participants list doesn't include all participants?
+        # e.g. '@discordgobot:beeper.local' has been seen sending a message
+        # with this chat's chat_id, but it isn't in the returned chat participant list).
+        top_sender_names = [id_to_name.get(id, id) for id in top_sender_ids]
+        full_title = ", ".join(top_sender_names)
+    assert full_title
+    return full_title
 
 
-@dataclass
-class Message:
-    id: MessageID
-    timestamp: datetime
-    sort_key: str
-    from_self: bool
-    sender_id: UserID
-    sender_name: str
-    text: str | None
-    reactions: list[Reaction]
-    attachments: list[Attachment]
-
-    def __init__(self, d: dict):
-        self.id = d["messageID"]
-        self.timestamp = datetime.fromisoformat(d["timestamp"])
-        self.sort_key = d["sortKey"]
-        self.from_self = d.get("isSender", False)
-        self.sender_id = d["senderID"]
-        self.sender_name = d.get("senderName", self.sender_id)
-        self.text = d.get("text")
-        self.reactions = [Reaction(r) for r in d.get("reactions", [])]
-        self.attachments = [Attachment(att) for att in d.get("attachments", [])]
-
-
-@dataclass
-class User:
-    id: UserID
-    full_name: str
-    is_self: bool
-
-    def __init__(self, d: dict):
-        self.id = d["id"]
-        self.full_name = d.get("fullName", d["id"])
-        self.is_self = d.get("isSelf", False)
-
-
-@dataclass
-class Chat:
-    id: ChatID
-    account: str
-    network: str
-    title: str
-    participants: list[User]
-
-    messages: list[Message] = field(default_factory=list)
-    _full_title: str | None = None
-
-    def __init__(self, d: dict):
-        self.id = d["id"]
-        self.account = d["accountID"]
-        self.network = d["network"]
-        self.title = d["title"]
-        # todo: may not be full list of users? (d["participants"]["hasMore"])
-        self.participants = [User(it) for it in d["participants"]["items"]]
-
-    def full_title(self) -> str:
-        if not self._full_title:
-            self_user = None
-            for ii in range(len(self.participants)):
-                if self.participants[ii].is_self:
-                    self_user = self.participants[ii]
-                    break
-
-            if self_user and self.title == self_user.full_name:
-                max_senders_in_title = 4
-                top_sender_ids = self._get_top_sender_ids(
-                    self_user.id, max_senders_in_title
-                )
-                id_to_name = {user.id: user.full_name for user in self.participants}
-                # Note: participants list doesn't include all participants?
-                # e.g. '@discordgobot:beeper.local' has been seen sending a message
-                # with this chat's chat_id, but it isn't in the returned chat participant list).
-                top_sender_names = [id_to_name.get(id, id) for id in top_sender_ids]
-                self._full_title = ", ".join(top_sender_names)
-            else:
-                self._full_title = self.title
-            assert self._full_title
-        return self._full_title
-
-    def _get_top_sender_ids(self, self_id: str, max_senders: int) -> list[UserID]:
-        # using defaultdict here because sometimes there are messages associated
-        # with a chat that are sent by a user who isn't listed in the chat
-        # participants.  We also prime the dict with all participants, because
-        # listed participants haven't always sent messages.
-        sent_histogram = defaultdict(int, ((user.id, 0) for user in self.participants))
-        for msg in self.messages:
-            sent_histogram[msg.sender_id] += 1
-        sorted_senders = sorted(sent_histogram.items(), key=lambda it: it[1])
-        top_senders = [
-            id for id, _ in filter(lambda it: it[0] != self_id, sorted_senders)
-        ][:max_senders]
-        return top_senders
+def is_message_blank(message: Message) -> bool:
+    # Seen in a few messages so far, likely a bug in beeper
+    return (
+        message.text is None
+        and message.attachments is None
+        and message.reactions is None
+    )
 
 
 @dataclass
@@ -212,7 +146,6 @@ class ExportContext:
     # Map attachment source_url (which may not exist locally) to local hydrated file path
     att_source_to_hydrated: dict[str, Path]
     resource_dir_path: Path
-    users: dict[UserID, User]
 
 
 HE = html.escape
@@ -231,44 +164,34 @@ def sanitize_file_name(file_name: str) -> str:
     return file_name if file_name else "_"
 
 
-def get_users(chats: list[Chat]) -> dict[UserID, User]:
-    users = {}
-    for chat in chats:
-        users.update({user.id: user for user in chat.participants})
-    return users
-
-
-async def hydrate_attachment(url: str) -> Path:
+async def hydrate_attachment(client: AsyncBeeperDesktop, url: str) -> Path | None:
     """Make Beeper download a cached copy of the attachment.
 
     Returns the file:/// URL of the attachment in Beeper's local cache.
     """
-
-    def _sync(url):
-        if url.startswith("mxc://"):
-            resp = requests.post(
-                f"{cfg().host_url}/v0/download-asset",
-                headers=cfg().request_headers,
-                json={"url": url},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            hydrated_url = data["srcURL"]
-        else:
-            hydrated_url = url
-        assert hydrated_url.startswith("file://")
+    if url.startswith("mxc://") or url.startswith("localmxc://"):
+        response = await client.assets.download(url=url)
+        assert not response.error
+        hydrated_url = response.src_url
+    else:
+        hydrated_url = url
+    assert hydrated_url and hydrated_url.startswith("file://")
+    try:
         return Path.from_uri(hydrated_url)
+    except ValueError:
+        # Some attachments were incorrectly sent by some Android clients, and
+        # are relative file:// paths that point to nothing.
+        return None
 
-    return await asyncio.to_thread(_sync, url)
 
-
-async def hydrate_attachments(chats: list[Chat]) -> dict[str, Path]:
+async def hydrate_chat_attachments(
+    client: AsyncBeeperDesktop, chat: Chat, messages: list[Message]
+) -> dict[str, Path | None]:
     source_urls = []
-    for chat in chats:
-        for msg in chat.messages:
-            for att in msg.attachments:
-                source_urls.append(att.source_url)
-    tasks = [hydrate_attachment(url) for url in source_urls]
+    for msg in messages:
+        for att in msg.attachments if msg.attachments else []:
+            source_urls.append(att.src_url)
+    tasks = [hydrate_attachment(client, url) for url in source_urls]
     hydrated_paths = await tqdm_asyncio.gather(
         *tasks, total=len(tasks), desc="Downloading attachments"
     )
@@ -279,11 +202,13 @@ async def hydrate_attachments(chats: list[Chat]) -> dict[str, Path]:
 
 def archive_attachment(
     attachment_dir_path: Path,
-    att_source_to_hydrated: dict[str, Path],
+    att_source_to_hydrated: dict[str, Path | None],
     time_sent: datetime,
     att: Attachment,
 ) -> Path:
-    source_file_path = att_source_to_hydrated[att.source_url]
+    source_file_path = att_source_to_hydrated[att.src_url]
+    if not source_file_path:
+        return ""
     attachment_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att.file_name)
@@ -293,17 +218,17 @@ def archive_attachment(
     target_file_path = attachment_dir_path / target_file_name
     mtime = time_sent.timestamp()
     if not target_file_path.exists():
-        source_file_path.copy(target_file_path)
+        shutil.copy(source_file_path, target_file_path)
         os.utime(target_file_path, times=(mtime, mtime))
     return target_file_path
 
 
-def message_to_html(ctx: ExportContext, msg: Message) -> None:
+async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     # from pprint import pformat
     # ctx.fout.write(f'<section><pre>{pformat(msg)}</pre></section>\n')
     # return
 
-    sec_class = "msg-self" if msg.from_self else "msg-them"
+    sec_class = "msg-self" if msg.is_sender else "msg-them"
     ts_utc = msg.timestamp
     ts_local = ts_utc.astimezone()
     ts_utc_str = ts_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -324,19 +249,20 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
         msg_text = bleach.linkify(msg_text)
         ctx.fout.write(msg_text)
 
-    for att in msg.attachments:
+    for att in msg.attachments if msg.attachments else []:
         att_file_path = archive_attachment(
             ctx.attachment_dir_path, ctx.att_source_to_hydrated, ts_local, att
         )
-        att_url = att_file_path.relative_to(
-            ctx.output_file_path.parent, walk_up=True
-        ).as_posix()
-        att_url = html.escape(att_url)
+        if att_file_path:
+            att_url = att_file_path.relative_to(
+                ctx.output_file_path.parent, walk_up=True
+            ).as_posix()
+            att_url = html.escape(att_url)
+        else:
+            att_url = ""
 
         dim_attr = (
-            f' width="{att.resolution[0]}" height="{att.resolution[1]}"'
-            if att.resolution
-            else ""
+            f' width="{att.size.width}" height="{att.size.height}"' if att.size else ""
         )
         if att.type == "img":
             ctx.fout.write(
@@ -352,11 +278,16 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
     ctx.fout.write("</div>")
 
     if msg.reactions:
+        user_id_to_full_name = {}
+        for user in chat.participants.items:
+            user_id_to_full_name[user.id] = user.full_name
         ctx.fout.write('<span class="reactions">\n')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
-            name = ctx.users[reaction.sender_id].full_name
-            keys_to_names[reaction.key].append(name)
+            name = user_id_to_full_name.get(
+                reaction.participant_id, reaction.participant_id
+            )
+            keys_to_names[reaction.reaction_key].append(name)
         for key, names in sorted(keys_to_names.items()):
             tooltip = f"{key}\n" + "\n".join(sorted(names))
             ctx.fout.write(f'<div title="{HE(tooltip)}">{HE(key)}</div>')
@@ -365,10 +296,9 @@ def message_to_html(ctx: ExportContext, msg: Message) -> None:
     ctx.fout.write("</section>\n")
 
 
-def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
-    if not chat.messages:
-        return
-
+async def chat_to_html(
+    ctx: ExportContext, chat_title: str, chat: Chat, messages: list[Message]
+) -> None:
     css_dir = html.escape(
         ctx.resource_dir_path.relative_to(
             ctx.output_file_path.parent, walk_up=True
@@ -380,7 +310,7 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
         f"<head>\n"
         f'    <meta charset="UTF-8">\n'
         f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"    <title>Chat: {HE(chat.full_title())}</title>\n"
+        f"    <title>Chat: {chat_title}</title>\n"
         f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
         f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
         f"</head>\n"
@@ -389,25 +319,24 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
 
     ctx.fout.write("<header>\n")
     ctx.fout.write('<section class="chat-header">\n')
-    ctx.fout.write(f"<h1>{HE(chat.full_title())}</h1>\n")
+    ctx.fout.write(f"<h1>{chat_title}</h1>\n")
     ctx.fout.write("<details>\n")
     ctx.fout.write(
         f'<div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
     )
     ctx.fout.write(
-        f'<div><span class="chat-details-label">Account ID: </span>{HE(chat.account)}</div>\n'
+        f'<div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
     )
     ctx.fout.write(
         f'<div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
     )
     ctx.fout.write(
-        f'<div><span class="chat-details-label">Message Count: </span>{len(chat.messages)}</div>\n'
+        f'<div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
     )
+    names = [get_user_name(user) for user in chat.participants.items]
     ctx.fout.write(
-        f'<div><span class="chat-details-label">Participants: </span>{len(chat.participants)}</div>\n'
+        f'<div><span class="chat-details-label">Participants: </span>{len(names)}</div>\n'
     )
-    users = chat.participants
-    names = [user.full_name for user in users]
     ctx.fout.write("<ul>\n")
     for name in sorted(names, key=lambda it: it.casefold()):
         ctx.fout.write(f"<li>{HE(name)}</li>\n")
@@ -417,8 +346,8 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
-    for msg in tqdm(chat.messages, desc="Exporting messages", leave=False):
-        message_to_html(ctx, msg)
+    for msg in tqdm(messages, desc="Exporting messages", leave=False):
+        await message_to_html(ctx, chat, msg)
     ctx.fout.write("</main>\n")
 
     ctx.fout.write("</body></html>\n")
@@ -427,7 +356,8 @@ def chat_to_html(ctx: ExportContext, chat: Chat) -> None:
 def write_chats_index(
     output_root_dir: Path,
     resource_dir_path: Path,
-    chat_id_to_html_path: dict[ChatID, Path],
+    chat_id_to_html_path: dict[str, Path],
+    chat_id_to_title: dict[str, str],
     chats: list[Chat],
 ) -> None:
     network_to_chats: dict[str, list[Chat]] = {}
@@ -463,12 +393,12 @@ def write_chats_index(
             fp.write(f"<li>{network_name}\n")
             fp.write("<ul>\n")
             for chat in sorted(
-                network_chats, key=lambda chat: chat.full_title().casefold()
+                network_chats, key=lambda chat: chat_id_to_title[chat.id].casefold()
             ):
                 chat_html_path = chat_id_to_html_path[chat.id]
                 chat_url = chat_html_path.relative_to(output_root_dir)
                 fp.write(
-                    f'<li><a href="{chat_url.as_posix()}">{HE(chat.full_title())}</a></li>\n'
+                    f'<li><a href="{chat_url.as_posix()}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
                 )
             fp.write("</ul>\n")
             fp.write("</li>\n")
@@ -483,132 +413,80 @@ def copy_resource_files(target_dir_path: Path) -> Path:
     for file_name in ("water.css", "extra.css"):
         source_file_path = source_dir_path / file_name
         target_file_path = target_dir_path / file_name
-        source_file_path.copy(target_file_path)
+        shutil.copy(source_file_path, target_file_path)
     return target_dir_path
 
 
-def write_html(
-    chats: list[Chat], att_source_to_hydrated: dict[str, Path], output_root_dir: Path
-) -> None:
-    resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
-    chat_id_to_html_path = {}
-    users = get_users(chats)
-    with tqdm(chats, desc="Exporting chats") as progress:
-        for chat in progress:
-            chat_title = sanitize_file_name(f"{chat.full_title()} ({chat.id})")
-            progress.set_description(f'Exporting chat "{chat_title}"')
-            chat.messages.sort(key=lambda chat: chat.sort_key)
+async def export_chat(
+    client: AsyncBeeperDesktop,
+    output_root_dir: Path,
+    resource_dir_path: Path,
+    chat_summary: Chat,
+) -> (str, str):
+    chat = await client.chats.retrieve(chat_summary.id)
+    messages = []
+    # todo progress
+    async for message in client.messages.list(chat.id):
+        if not is_message_blank(message):
+            messages.append(message)
+    messages.sort(key=lambda message: message.sort_key)
 
-            network_dir_name = sanitize_file_name(chat.network.lower())
-            output_dir_path = output_root_dir / "chats" / network_dir_name
-            output_dir_path.mkdir(parents=True, exist_ok=True)
+    chat_title = get_chat_title(chat, messages)
+    chat_title_safe = sanitize_file_name(f"{chat_title} ({chat.id})")
+    att_source_to_hydrated = await hydrate_chat_attachments(client, chat, messages)
 
-            html_file_path = output_dir_path / (chat_title + ".html")
-            attachment_dir_path = (
-                output_root_dir / "media" / network_dir_name / chat_title
-            )
-            with open(html_file_path, "w", encoding="utf-8") as fp:
-                context = ExportContext(
-                    html_file_path,
-                    fp,
-                    attachment_dir_path,
-                    att_source_to_hydrated,
-                    resource_dir_path,
-                    users,
-                )
-                chat_to_html(context, chat)
-            if chat.messages:
-                mtime = chat.messages[-1].timestamp.astimezone().timestamp()
-                os.utime(html_file_path, times=(mtime, mtime))
+    network_dir_name = sanitize_file_name(chat.network.lower())
+    output_dir_path = output_root_dir / "chats" / network_dir_name
+    output_dir_path.mkdir(parents=True, exist_ok=True)
 
-            chat_id = chat.id
-            assert chat_id not in chat_id_to_html_path
-            chat_id_to_html_path[chat_id] = html_file_path
+    html_file_path = output_dir_path / (chat_title_safe + ".html")
+    attachment_dir_path = output_root_dir / "media" / network_dir_name / chat_title_safe
 
-    write_chats_index(output_root_dir, resource_dir_path, chat_id_to_html_path, chats)
-
-
-def get_all_chats() -> list[Chat]:
-    chat_id_to_chats: dict[str, Chat] = {}
-    chat_id_to_messages: dict[str, list[Message]] = {}
-
-    cursor = None
-    with tqdm(desc="Gathering messages") as progress:
-        while True:
-            params: dict[Any, Any] = {"limit": 20}  # 20 is the cap per page
-            params["excludeLowPriority"] = False
-            params["includeMuted"] = True
-            if cursor:
-                params["cursor"] = cursor
-                params["direction"] = "before"
-
-            resp = requests.get(
-                f"{cfg().host_url}/v0/search-messages",
-                headers=cfg().request_headers,
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-
-            for chat_id, details in data.get("chats").items():
-                chat_id_to_chats[chat_id] = Chat(details)
-
-            for msg in data.get("items", []):
-                chat_id_to_messages.setdefault(msg["chatID"], []).append(Message(msg))
-
-            if not data.get("hasMore") or not data.get("oldestCursor"):
-                break
-            cursor = data["oldestCursor"]
-            progress.update()
-
-    messages_with_no_chat = set(chat_id_to_messages.keys()) - set(
-        chat_id_to_chats.keys()
-    )
-    assert not messages_with_no_chat
-
-    chats = []
-    for chat_id, chat in chat_id_to_chats.items():
-        chat.messages = chat_id_to_messages.get(chat_id, [])
-        chats.append(chat)
-    return chats
-
-
-def get_beeper_items(
-    progress_text: str, endpoint: str, params: dict, item_type: Type[TDC]
-) -> list[TDC]:
-    items = []
-    cursor = None
-    params = params.copy()
-    with tqdm(desc=progress_text, leave=False) as progress:
-        while True:
-            if cursor:
-                params["cursor"] = cursor
-                params["direction"] = "before"
-            resp = requests.get(
-                f"{cfg().host_url}/v0/{endpoint}",
-                headers=cfg().request_headers,
-                params=params,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            items.extend(data["items"])
-            if not data.get("hasMore") or not data.get("oldestCursor"):
-                break
-            cursor = data["oldestCursor"]
-            progress.update()
-    return items
-
-
-def get_all_chats2() -> list[Chat]:
-    chats = get_beeper_items("Gathering chats", "list-chats", {"limit": 200}, Chat)
-    for chat in tqdm(chats, desc="Gathering chat messages", leave=False):
-        chat.messages = get_beeper_items(
-            f'Chat "{chat.id}"',
-            "list-messages",
-            {"limit": 500, "chatID": chat.id},
-            Message,
+    with open(html_file_path, "w", encoding="utf-8") as fp:
+        context = ExportContext(
+            html_file_path,
+            fp,
+            attachment_dir_path,
+            att_source_to_hydrated,
+            resource_dir_path,
         )
-    return chats
+        await chat_to_html(context, chat_title, chat, messages)
+
+    if messages:
+        mtime = messages[-1].timestamp.astimezone().timestamp()
+        os.utime(html_file_path, times=(mtime, mtime))
+
+    return chat_title, html_file_path
+
+
+async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path):
+    resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
+
+    # Chats returned by list don't currently have all info associated with
+    # them (e.g. participants list is truncated), so treating them as
+    # summaries to be filled out with individual chats.retrieve(id) calls.
+    chat_summaries = []
+    async for chat_summary in client.chats.list():
+        chat_summaries.append(chat_summary)
+
+    chat_id_to_title = {}
+    chat_id_to_html_path = {}
+    with tqdm(chat_summaries, desc="Exporting chats") as progress:
+        for chat_summary in progress:
+            progress.set_description(f'Exporting chat "{chat_summary.id}"')
+            chat_title, html_path = await export_chat(
+                client, output_root_dir, resource_dir_path, chat_summary
+            )
+            chat_id_to_title[chat_summary.id] = chat_title
+            chat_id_to_html_path[chat_summary.id] = html_path
+
+    write_chats_index(
+        output_root_dir,
+        resource_dir_path,
+        chat_id_to_html_path,
+        chat_id_to_title,
+        chat_summaries,
+    )
 
 
 def check_beeper_version() -> None:
@@ -637,7 +515,6 @@ def check_beeper_version() -> None:
 
 def create_example():
     import json
-    import shutil
 
     this_dir_path = Path(__file__).parent
     output_root_dir = this_dir_path / "example"
@@ -648,9 +525,9 @@ def create_example():
         data = json.load(fp)
     chat = Chat(data["chat"])
     chat.messages = [Message(msg) for msg in data["messages"]]
-    example_png_path = this_dir_path / "test" / "goodgood.png"
+    # example_png_path = this_dir_path / "test" / "goodgood.png"
 
-    write_html([chat], {"file:///test/goodgood.png": example_png_path}, output_root_dir)
+    # write_html([chat], {"file:///test/goodgood.png": example_png_path}, output_root_dir)
 
     index_html_path = output_root_dir / "index.html"
     with open(index_html_path, encoding="utf-8") as fp:
@@ -676,11 +553,11 @@ async def main():
         args = parser.parse_args()
 
         init_cfg(args)
-        check_beeper_version()
+        # todo
+        # check_beeper_version()
 
-        chats = get_all_chats()
-        att_source_to_hydrated = await hydrate_attachments(chats)
-        write_html(chats, att_source_to_hydrated, args.output_root_dir)
+        client = AsyncBeeperDesktop(access_token=cfg().access_token)
+        await export_all_chats(client, args.output_root_dir)
     except KeyboardInterrupt:
         fatal("Manually aborted")
 
