@@ -193,7 +193,7 @@ async def hydrate_chat_attachments(
             source_urls.append(att.src_url)
     tasks = [hydrate_attachment(client, url) for url in source_urls]
     hydrated_paths = await tqdm_asyncio.gather(
-        *tasks, total=len(tasks), desc="Downloading attachments"
+        *tasks, total=len(tasks), desc="Downloading chat attachments", leave=False
     )
     assert len(source_urls) == len(hydrated_paths)
     source_to_hydrated = dict(zip(source_urls, hydrated_paths))
@@ -346,7 +346,7 @@ async def chat_to_html(
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
-    for msg in tqdm(messages, desc="Exporting messages", leave=False):
+    for msg in tqdm(messages, desc="Exporting chat messages", leave=False):
         await message_to_html(ctx, chat, msg)
     ctx.fout.write("</main>\n")
 
@@ -359,7 +359,7 @@ def write_chats_index(
     chat_id_to_html_path: dict[str, Path],
     chat_id_to_title: dict[str, str],
     chats: list[Chat],
-) -> None:
+) -> Path:
     network_to_chats: dict[str, list[Chat]] = {}
     for chat in chats:
         network_to_chats.setdefault(chat.network, []).append(chat)
@@ -404,6 +404,7 @@ def write_chats_index(
             fp.write("</li>\n")
         fp.write("</ul>\n")
         fp.write("</body></html>\n")
+    return index_file_path
 
 
 def copy_resource_files(target_dir_path: Path) -> Path:
@@ -425,10 +426,11 @@ async def export_chat(
 ) -> (str, str):
     chat = await client.chats.retrieve(chat_summary.id)
     messages = []
-    # todo progress
-    async for message in client.messages.list(chat.id):
-        if not is_message_blank(message):
-            messages.append(message)
+    with tqdm(desc="Gathering chat messages", leave=False) as progress:
+        async for message in client.messages.list(chat.id):
+            progress.update()
+            if not is_message_blank(message):
+                messages.append(message)
     messages.sort(key=lambda message: message.sort_key)
 
     chat_title = get_chat_title(chat, messages)
@@ -459,7 +461,7 @@ async def export_chat(
     return chat_title, html_file_path
 
 
-async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path):
+async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) -> Path:
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
     # Chats returned by list don't currently have all info associated with
@@ -480,7 +482,7 @@ async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path):
             chat_id_to_title[chat_summary.id] = chat_title
             chat_id_to_html_path[chat_summary.id] = html_path
 
-    write_chats_index(
+    return write_chats_index(
         output_root_dir,
         resource_dir_path,
         chat_id_to_html_path,
@@ -513,23 +515,17 @@ def check_beeper_version() -> None:
         )
 
 
-def create_example():
-    import json
+async def create_example():
+    from test.mock import MockAsyncBeeperDesktop
 
     this_dir_path = Path(__file__).parent
+    test_data_path = this_dir_path / "test"
     output_root_dir = this_dir_path / "example"
     if output_root_dir.exists():
         shutil.rmtree(output_root_dir)
 
-    with open("test/chat.json", encoding="utf-8") as fp:
-        data = json.load(fp)
-    chat = Chat(data["chat"])
-    chat.messages = [Message(msg) for msg in data["messages"]]
-    # example_png_path = this_dir_path / "test" / "goodgood.png"
-
-    # write_html([chat], {"file:///test/goodgood.png": example_png_path}, output_root_dir)
-
-    index_html_path = output_root_dir / "index.html"
+    client = MockAsyncBeeperDesktop(test_data_path)
+    index_html_path = await export_all_chats(client, output_root_dir)
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
     output_html = re.sub(
@@ -564,6 +560,6 @@ async def main():
 
 if __name__ == "__main__":
     if len(sys.argv) == 2 and sys.argv[1] == "--create-example":
-        create_example()
+        asyncio.run(create_example())
     else:
         asyncio.run(main())

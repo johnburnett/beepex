@@ -1,8 +1,8 @@
 {
   "chat": {
     "id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-    "localChatID": "6998",
-    "accountID": "discordgo",
+    "local_chat_id": "6998",
+    "account_id": "discordgo",
     "network": "Discord",
     "title": "Four Yorkshiremen",
     "type": "group",
@@ -10,120 +10,120 @@
       "items": [
         {
           "id": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
-          "fullName": "Graham",
-          "isSelf": true
+          "full_name": "Graham",
+          "is_self": true
         },
         {
           "id": "user_john_589397d4_e167_437f_8c9b_920bf0951214",
-          "fullName": "John",
-          "isSelf": false
+          "full_name": "John",
+          "is_self": false
         },
         {
           "id": "user_terry_6495a1d5_cd1e_47f6_bf23_8c918348c66c",
-          "fullName": "Terry",
-          "isSelf": false
+          "full_name": "Terry",
+          "is_self": false
         },
         {
           "id": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
-          "fullName": "Eric",
-          "isSelf": false
+          "full_name": "Eric",
+          "is_self": false
         },
         {
           "id": "user_gilliam_8a64b321_afc6_4470_9d9a_b81860b839bd",
-          "fullName": "Gilliam",
-          "isSelf": false
+          "full_name": "Gilliam",
+          "is_self": false
         },
         {
           "id": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
-          "fullName": "Michael",
-          "isSelf": false
+          "full_name": "Michael",
+          "is_self": false
         }
       ],
       "hasMore": false,
       "total": 6
     },
-    "lastActivity": "2025-09-07T22:53:57.885Z",
-    "unreadCount": 0,
-    "lastReadMessageSortKey": 198783,
-    "isArchived": false,
-    "isMuted": false,
-    "isPinned": false
+    "last_activity": "2025-09-07T22:53:57.885Z",
+    "unread_count": 0,
+    "last_read_message_sort_key": 198783,
+    "is_archived": false,
+    "is_muted": false,
+    "is_pinned": false
   },
   "messages": [
     {
       "id": "56",
-      "messageID": "56",
-      "chatID": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-      "accountID": "discordgo",
-      "senderID": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
-      "senderName": "Michael",
+      "message_id": "56",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
+      "sender_name": "Michael",
       "timestamp": "2025-09-07T15:44:37.625Z",
-      "sortKey": 188197,
+      "sort_key": 188197,
       "text": "Very passable, I say, very passable.",
-      "isSender": false,
+      "is_sender": false,
       "reactions": [
         {
           "id": "0",
-          "participantID": "user_john_589397d4_e167_437f_8c9b_920bf0951214",
-          "reactionKey": "🍷"
+          "participant_id": "user_john_589397d4_e167_437f_8c9b_920bf0951214",
+          "reaction_key": "🍷"
         },
         {
           "id": "1",
-          "participantID": "user_gilliam_8a64b321_afc6_4470_9d9a_b81860b839bd",
-          "reactionKey": "🐹"
+          "participant_id": "user_gilliam_8a64b321_afc6_4470_9d9a_b81860b839bd",
+          "reaction_key": "🐹"
         },
         {
           "id": "2",
-          "participantID": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
-          "reactionKey": "🍷"
+          "participant_id": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
+          "reaction_key": "🍷"
         }
       ]
     },
     {
       "id": "877",
-      "messageID": "877",
-      "chatID": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-      "accountID": "discordgo",
-      "senderID": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
-      "senderName": "Graham",
+      "message_id": "877",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
+      "sender_name": "Graham",
       "timestamp": "2025-09-07T15:45:08.322Z",
-      "sortKey": 188394,
+      "sort_key": 188394,
       "text": "Nothing like a good glass of Château de Chasselas, eh, Josiah?",
-      "isSender": true
+      "is_sender": true
     },
     {
       "id": "881",
-      "messageID": "881",
-      "chatID": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-      "accountID": "discordgo",
-      "senderID": "user_terry_6495a1d5_cd1e_47f6_bf23_8c918348c66c",
-      "senderName": "Terry",
+      "message_id": "881",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_terry_6495a1d5_cd1e_47f6_bf23_8c918348c66c",
+      "sender_name": "Terry",
       "timestamp": "2025-09-07T15:45:15.246Z",
-      "sortKey": 188398,
+      "sort_key": 188398,
       "text": "Aye, You're right there, Obadiah.",
-      "isSender": false,
-      "isUnread": false
+      "is_sender": false,
+      "is_unread": false
     },
     {
       "id": "883",
-      "messageID": "883",
-      "chatID": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-      "accountID": "discordgo",
-      "senderID": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
-      "senderName": "Graham",
+      "message_id": "883",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
+      "sender_name": "Graham",
       "timestamp": "2025-09-07T15:48:10.134Z",
-      "sortKey": 188400,
+      "sort_key": 188400,
       "text": "Aye.\n",
-      "isSender": true,
+      "is_sender": true,
       "attachments": [
         {
           "type": "img",
-          "srcURL": "file:///test/goodgood.png",
-          "mimeType": "image/png",
-          "fileName": "goodgood.png",
-          "fileSize": 99117,
-          "isGif": false,
-          "isSticker": false,
+          "src_url": "mxc:///test/goodgood.png",
+          "mime_type": "image/png",
+          "file_name": "goodgood.png",
+          "file_size": 99117,
+          "is_gif": false,
+          "is_sticker": false,
           "size": {
             "width": 470,
             "height": 390
@@ -133,23 +133,23 @@
       "reactions": [
         {
           "id": "0",
-          "participantID": "user_gilliam_8a64b321_afc6_4470_9d9a_b81860b839bd",
-          "reactionKey": "🧐"
+          "participant_id": "user_gilliam_8a64b321_afc6_4470_9d9a_b81860b839bd",
+          "reaction_key": "🧐"
         }
       ],
-      "isUnread": false
+      "is_unread": false
     },
     {
       "id": "13836",
-      "messageID": "13836",
-      "chatID": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
-      "accountID": "discordgo",
-      "senderID": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
-      "senderName": "Eric",
+      "message_id": "13836",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
+      "sender_name": "Eric",
       "timestamp": "2025-09-07T22:53:57.885Z",
-      "sortKey": 198783,
+      "sort_key": 198783,
       "text": "Who would’ve thought, thirty years ago, we'd all be sittin’ here drinkin’ Château de Chasselas, eh?",
-      "isSender": false
+      "is_sender": false
     }
   ]
 }
