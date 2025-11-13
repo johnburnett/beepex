@@ -16,6 +16,7 @@ from typing import NoReturn, TextIO
 from beeper_desktop_api import AsyncBeeperDesktop
 from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
+from dotenv import load_dotenv
 from packaging import version
 import requests
 from rich import traceback
@@ -62,6 +63,7 @@ def init_cfg(args) -> None:
     if args.token:
         access_token = args.token
     else:
+        load_dotenv()
         access_token = os.environ.get("BEEPER_ACCESS_TOKEN")
     if not access_token:
         fatal(
@@ -544,7 +546,7 @@ async def main():
         parser.add_argument("output_root_dir", type=Path)
         parser.add_argument(
             "--token",
-            help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable.",
+            help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
         )
         args = parser.parse_args()
 
