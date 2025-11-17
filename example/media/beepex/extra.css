@@ -2,6 +2,7 @@
     --chat-header-background: rgb(212 255 220);
     --msg-self-background: rgb(206 222 255);
     --msg-them-background: rgb(220 220 220);
+    --msg-target-background: rgb(255 255 187);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -9,7 +10,12 @@
     --chat-header-background: rgb(75 97 79);
     --msg-self-background: rgb(92 102 121);
     --msg-them-background: rgb(82 82 82);
+    --msg-target-background: rgb(122 122 14);
 }
+}
+
+:target {
+   background-color: var(--msg-target-background);
 }
 
 section.chat-header {
@@ -83,5 +89,5 @@ span.reactions {
     float: right;
     margin-top: -5px;
     border-radius: 5px;
-    border: 1px solid #ffffff;
+    border: 1px solid var(--background-body);
 }

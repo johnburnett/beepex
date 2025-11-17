@@ -234,14 +234,19 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     ts_utc = msg.timestamp
     ts_local = ts_utc.astimezone()
     ts_utc_str = ts_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
-    ts_local_str = ts_local.strftime("%Y-%m-%d %H:%M:%S %Z")
+    ts_local_str = ts_local.strftime("%Y-%m-%d %H:%M:%S")
+    replied_link = ""
+    linked_message_id = getattr(msg, "linked_message_id", None)
+    if linked_message_id:
+        replied_link = f'<a title="Reply to message {HE(linked_message_id)}" href="#{HE(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>'
     ctx.fout.write(
         f'<section class="msg {sec_class}">'
         f'<div id="{HE(msg.id)}" class="msg-header">'
         f'<span class="msg-contact-name">{HE(msg.sender_name)}</span>'
+        f"{replied_link}"
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
-        f'<a class="permalink" title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;'
-        f"</a></div>\n"
+        f'<a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>'
+        f"</div>\n"
         f"<div>\n"
     )
 

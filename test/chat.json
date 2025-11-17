@@ -150,6 +150,19 @@
       "sort_key": 198783,
       "text": "Who would’ve thought, thirty years ago, we'd all be sittin’ here drinkin’ Château de Chasselas, eh?",
       "is_sender": false
+    },
+    {
+      "id": "13900",
+      "message_id": "13900",
+      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "account_id": "discordgo",
+      "sender_id": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
+      "sender_name": "Michael",
+      "timestamp": "2025-09-07T22:57:57.885Z",
+      "sort_key": 198783,
+      "text": "Nobody expects the Spanish Inquisition!",
+      "is_sender": false,
+      "linked_message_id": "877"
     }
   ]
 }
