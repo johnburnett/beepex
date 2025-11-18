@@ -3,6 +3,7 @@
     --msg-self-background: rgb(206 222 255);
     --msg-them-background: rgb(220 220 220);
     --msg-target-background: rgb(255 255 187);
+    --msg-error: rgb(196 80 80);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -11,6 +12,7 @@
     --msg-self-background: rgb(92 102 121);
     --msg-them-background: rgb(82 82 82);
     --msg-target-background: rgb(122 122 14);
+    --msg-error: rgb(247 141 141);
 }
 }
 
@@ -90,4 +92,8 @@ span.reactions {
     margin-top: -5px;
     border-radius: 5px;
     border: 1px solid var(--background-body);
+}
+
+span.error {
+    color: var(--msg-error);
 }

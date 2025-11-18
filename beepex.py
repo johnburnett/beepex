@@ -173,11 +173,13 @@ async def hydrate_attachment(client: AsyncBeeperDesktop, url: str) -> Path | Non
     """
     if url.startswith("mxc://") or url.startswith("localmxc://"):
         response = await client.assets.download(url=url)
-        assert not response.error
-        hydrated_url = response.src_url
+        if response.error:
+            return None
+        else:
+            hydrated_url = response.src_url
     else:
         hydrated_url = url
-    assert hydrated_url and hydrated_url.startswith("file://")
+    assert hydrated_url.startswith("file://")
     try:
         return Path.from_uri(hydrated_url)
     except ValueError:
@@ -207,10 +209,10 @@ def archive_attachment(
     att_source_to_hydrated: dict[str, Path | None],
     time_sent: datetime,
     att: Attachment,
-) -> Path:
+) -> Path | None:
     source_file_path = att_source_to_hydrated[att.src_url]
     if not source_file_path:
-        return ""
+        return None
     attachment_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att.file_name)
@@ -246,8 +248,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
         f"{replied_link}"
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
         f'<a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>'
-        f"</div>\n"
-        f"<div>\n"
+        f"</div><div>\n"
     )
 
     if msg.text:
@@ -265,30 +266,34 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
                 ctx.output_file_path.parent, walk_up=True
             ).as_posix()
             att_url = html.escape(att_url)
+
+            dim_attr = (
+                f' width="{att.size.width}" height="{att.size.height}"'
+                if att.size
+                else ""
+            )
+            if att.type == "img":
+                ctx.fout.write(
+                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}"/></a>\n'
+                )
+            elif att.type == "video":
+                ctx.fout.write(
+                    f'<video controls loop playsinline{dim_attr} src="{att_url}"/>\n'
+                )
+            elif att.type == "audio":
+                ctx.fout.write(f'<audio controls src="{att_url}"/>\n')
         else:
-            att_url = ""
-
-        dim_attr = (
-            f' width="{att.size.width}" height="{att.size.height}"' if att.size else ""
-        )
-        if att.type == "img":
             ctx.fout.write(
-                f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}"/></a>\n'
+                f'<span class="error">&#x26A0;&#xFE0E; Missing Attachment: "{att.src_url}"</span>'
             )
-        elif att.type == "video":
-            ctx.fout.write(
-                f'<video controls loop playsinline{dim_attr} src="{att_url}"/>\n'
-            )
-        elif att.type == "audio":
-            ctx.fout.write(f'<audio controls src="{att_url}"/>\n')
 
-    ctx.fout.write("</div>")
+    ctx.fout.write("\n</div>")
 
     if msg.reactions:
         user_id_to_full_name = {}
         for user in chat.participants.items:
             user_id_to_full_name[user.id] = user.full_name
-        ctx.fout.write('<span class="reactions">\n')
+        ctx.fout.write('<span class="reactions">')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
             name = user_id_to_full_name.get(
@@ -298,7 +303,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
         for key, names in sorted(keys_to_names.items()):
             tooltip = f"{key}\n" + "\n".join(sorted(names))
             ctx.fout.write(f'<div title="{HE(tooltip)}">{HE(key)}</div>')
-        ctx.fout.write("</span>\n")
+        ctx.fout.write("</span>")
 
     ctx.fout.write("</section>\n")
 
@@ -471,11 +476,17 @@ async def export_chat(
 async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) -> Path:
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
+    include_chat_ids = set()
+    # include_chat_ids.update((
+    #     "",
+    # ))
     # Chats returned by list don't currently have all info associated with
     # them (e.g. participants list is truncated), so treating them as
     # summaries to be filled out with individual chats.retrieve(id) calls.
     chat_summaries = []
     async for chat_summary in client.chats.list():
+        if include_chat_ids and chat_summary.id not in include_chat_ids:
+            continue
         chat_summaries.append(chat_summary)
 
     chat_id_to_title = {}
