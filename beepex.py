@@ -152,6 +152,8 @@ class ExportContext:
 
 HE = html.escape
 
+info = print
+
 
 def fatal(msg: str) -> NoReturn:
     print(msg)
@@ -358,7 +360,7 @@ async def chat_to_html(
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
-    for msg in tqdm(messages, desc="Exporting chat messages", leave=False):
+    for msg in tqdm(messages, desc="Writing chat messages", leave=False):
         await message_to_html(ctx, chat, msg)
     ctx.fout.write("</main>\n")
 
@@ -474,6 +476,9 @@ async def export_chat(
 
 
 async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) -> Path:
+    info(f'Exporting chats to "{output_root_dir}"')
+    time_start = datetime.now()
+
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
     include_chat_ids = set()
@@ -491,22 +496,27 @@ async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) ->
 
     chat_id_to_title = {}
     chat_id_to_html_path = {}
-    with tqdm(chat_summaries, desc="Exporting chats") as progress:
+    with tqdm(chat_summaries, leave=False) as progress:
         for chat_summary in progress:
-            progress.set_description(f'Exporting chat "{chat_summary.id}"')
+            progress.set_description(f'Chat "{chat_summary.id}"')
             chat_title, html_path = await export_chat(
                 client, output_root_dir, resource_dir_path, chat_summary
             )
             chat_id_to_title[chat_summary.id] = chat_title
             chat_id_to_html_path[chat_summary.id] = html_path
 
-    return write_chats_index(
+    chat_index_path = write_chats_index(
         output_root_dir,
         resource_dir_path,
         chat_id_to_html_path,
         chat_id_to_title,
         chat_summaries,
     )
+
+    time_end = datetime.now()
+    info(f"Export took {time_end - time_start}")
+
+    return chat_index_path
 
 
 def check_beeper_version() -> None:
@@ -516,9 +526,7 @@ def check_beeper_version() -> None:
             headers=cfg().request_headers,
         )
     except requests.ConnectionError as ex:
-        print(
-            "Error connecting to Beeper, make sure the Beeper Desktop API is enabled."
-        )
+        info("Error connecting to Beeper, make sure the Beeper Desktop API is enabled.")
         fatal(repr(ex))
     resp.raise_for_status()
     beeper_version_str = resp.headers.get("X-Beeper-Desktop-Version")
@@ -533,12 +541,11 @@ def check_beeper_version() -> None:
         )
 
 
-async def create_example():
+async def create_example(output_root_dir: Path):
     from test.mock import MockAsyncBeeperDesktop
 
     this_dir_path = Path(__file__).parent
     test_data_path = this_dir_path / "test"
-    output_root_dir = this_dir_path / "example"
     if output_root_dir.exists():
         shutil.rmtree(output_root_dir)
 
@@ -557,27 +564,28 @@ async def create_example():
 
 
 async def main():
-    try:
-        parser = argparse.ArgumentParser()
-        parser.add_argument("output_root_dir", type=Path)
-        parser.add_argument(
-            "--token",
-            help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
-        )
-        args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("output_root_dir", type=Path)
+    parser.add_argument(
+        "--token",
+        help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
+    )
+    parser.add_argument("--create_example", action="store_true", help=argparse.SUPPRESS)
+    args = parser.parse_args()
 
-        init_cfg(args)
-        # todo
-        # check_beeper_version()
+    init_cfg(args)
+    # todo
+    # check_beeper_version()
 
+    if args.create_example:
+        await create_example(args.output_root_dir)
+    else:
         client = AsyncBeeperDesktop(access_token=cfg().access_token)
         await export_all_chats(client, args.output_root_dir)
-    except KeyboardInterrupt:
-        fatal("Manually aborted")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) == 2 and sys.argv[1] == "--create-example":
-        asyncio.run(create_example())
-    else:
+    try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        fatal("Manually aborted")
