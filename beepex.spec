@@ -11,15 +11,6 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
-    [],
-    exclude_binaries=True,
-    name='beepex',
-    bootloader_ignore_signals=False,
-    strip=True,
-    console=True,
-)
-coll = COLLECT(
-    exe,
     a.binaries,
     a.datas,
     strip=True,
