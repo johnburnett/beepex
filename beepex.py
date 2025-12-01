@@ -457,12 +457,16 @@ async def export_chat(
 ) -> tuple[str, Path]:
     chat = await client.chats.retrieve(chat_summary.id)
     messages = []
+    # seen_ids and sorting by timestamp and not sort_key is to work around
+    # a bug with Beeper not filtering out messages or setting sort_key properly.
+    seen_ids = set()
     with tqdm(desc="Gathering chat messages", leave=False) as progress:
         async for message in client.messages.list(chat.id):
             progress.update()
-            if not is_message_blank(message):
+            if not is_message_blank(message) and message.id not in seen_ids:
+                seen_ids.add(message.id)
                 messages.append(message)
-    messages.sort(key=lambda message: message.sort_key)
+    messages.sort(key=lambda message: message.timestamp)
 
     chat_title = get_chat_title(chat, messages)
     chat_title_safe = sanitize_file_name(f"{chat_title} ({chat.id})")
