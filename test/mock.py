@@ -1,6 +1,7 @@
 from datetime import datetime
 import json
 from pathlib import Path
+from typing import AsyncGenerator
 
 
 class MockData:
@@ -41,7 +42,7 @@ class MockChats:
     async def retrieve(self, id: str) -> MockData:
         return self._chat
 
-    async def list(self) -> list[MockData]:
+    async def list(self) -> AsyncGenerator[MockData]:
         yield self._chat
 
 
@@ -49,7 +50,7 @@ class MockMessages:
     def __init__(self, messages: list[dict]):
         self._messages = [MockData(msg) for msg in messages]
 
-    async def list(self, id: str) -> list[MockData]:
+    async def list(self, id: str) -> AsyncGenerator[MockData]:
         for message in self._messages:
             yield message
 

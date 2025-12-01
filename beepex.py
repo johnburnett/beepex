@@ -3,7 +3,7 @@ import argparse
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import html
 import os
 from pathlib import Path
@@ -11,10 +11,10 @@ import re
 import shutil
 import socket
 import sys
-from typing import NoReturn, TextIO
+from typing import no_type_check, NoReturn, TextIO
 
 from beeper_desktop_api import AsyncBeeperDesktop
-from beeper_desktop_api.types import Attachment, Chat, Message, User
+from beeper_desktop_api.types import Attachment, Chat, ChatListResponse, Message, User
 import bleach
 from dotenv import load_dotenv
 from packaging import version
@@ -125,7 +125,8 @@ def get_chat_title(chat: Chat, messages: list[Message]) -> str:
         # Note: participants list doesn't include all participants?
         # e.g. '@discordgobot:beeper.local' has been seen sending a message
         # with this chat's chat_id, but it isn't in the returned chat participant list).
-        top_sender_names = [id_to_name.get(id, id) for id in top_sender_ids]
+        # str(...) cast is to work around mypy complaining that .get is type "str|None"
+        top_sender_names = [str(id_to_name.get(id, id)) for id in top_sender_ids]
         full_title = ", ".join(top_sender_names)
     assert full_title
     return full_title
@@ -146,7 +147,7 @@ class ExportContext:
     fout: TextIO
     attachment_dir_path: Path
     # Map attachment source_url (which may not exist locally) to local hydrated file path
-    att_source_to_hydrated: dict[str, Path]
+    att_source_to_hydrated: dict[str, Path | None]
     resource_dir_path: Path
 
 
@@ -181,6 +182,7 @@ async def hydrate_attachment(client: AsyncBeeperDesktop, url: str) -> Path | Non
             hydrated_url = response.src_url
     else:
         hydrated_url = url
+    assert isinstance(hydrated_url, str)
     assert hydrated_url.startswith("file://")
     try:
         return Path.from_uri(hydrated_url)
@@ -196,7 +198,8 @@ async def hydrate_chat_attachments(
     source_urls = []
     for msg in messages:
         for att in msg.attachments if msg.attachments else []:
-            source_urls.append(att.src_url)
+            if att.src_url:
+                source_urls.append(att.src_url)
     tasks = [hydrate_attachment(client, url) for url in source_urls]
     hydrated_paths = await tqdm_asyncio.gather(
         *tasks, total=len(tasks), desc="Downloading chat attachments", leave=False
@@ -212,12 +215,14 @@ def archive_attachment(
     time_sent: datetime,
     att: Attachment,
 ) -> Path | None:
+    if not att.src_url:
+        return None
     source_file_path = att_source_to_hydrated[att.src_url]
     if not source_file_path:
         return None
     attachment_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
-    target_file_name, target_file_ext = os.path.splitext(att.file_name)
+    target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
     target_file_name = (
         sanitize_file_name(f"{time_sent_str}_{target_file_name}") + target_file_ext
     )
@@ -246,7 +251,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     ctx.fout.write(
         f'<section class="msg {sec_class}">'
         f'<div id="{HE(msg.id)}" class="msg-header">'
-        f'<span class="msg-contact-name">{HE(msg.sender_name)}</span>'
+        f'<span class="msg-contact-name">{HE(msg.sender_name or "Unknown")}</span>'
         f"{replied_link}"
         f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
         f'<a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>'
@@ -298,8 +303,10 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
         ctx.fout.write('<span class="reactions">')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
-            name = user_id_to_full_name.get(
-                reaction.participant_id, reaction.participant_id
+            name = str(
+                user_id_to_full_name.get(
+                    reaction.participant_id, reaction.participant_id
+                )
             )
             keys_to_names[reaction.reaction_key].append(name)
         for key, names in sorted(keys_to_names.items()):
@@ -370,11 +377,13 @@ async def chat_to_html(
 def write_chats_index(
     output_root_dir: Path,
     resource_dir_path: Path,
+    export_time: datetime,
+    export_duration: timedelta,
     chat_id_to_html_path: dict[str, Path],
     chat_id_to_title: dict[str, str],
-    chats: list[Chat],
+    chats: list[ChatListResponse],
 ) -> Path:
-    network_to_chats: dict[str, list[Chat]] = {}
+    network_to_chats: dict[str, list[ChatListResponse]] = {}
     for chat in chats:
         network_to_chats.setdefault(chat.network, []).append(chat)
 
@@ -382,9 +391,8 @@ def write_chats_index(
     with open(index_file_path, "w", encoding="utf-8") as fp:
         css_dir = resource_dir_path.relative_to(output_root_dir).as_posix()
         hostname = socket.gethostname()
-        now = datetime.now()
-        now_date = now.strftime("%Y-%m-%d")
-        now_time = now.strftime("%H:%M:%S")
+        export_ymd = export_time.strftime("%Y-%m-%d")
+        export_hms = export_time.strftime("%H:%M:%S")
         fp.write(
             f"<!DOCTYPE html>\n"
             f'<html lang="en">\n'
@@ -393,12 +401,21 @@ def write_chats_index(
             f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f"    <title>Beeper Chats</title>\n"
             f'    <link rel="stylesheet" href="{HE(css_dir)}/water.css">\n'
+            f'    <link rel="stylesheet" href="{HE(css_dir)}/extra.css">\n'
             f"</head>\n"
             f"<body>\n"
+            f"<header>\n"
+            f'<section class="chat-header">\n'
             f"    <h1>Beeper Chats</h1>\n"
-            f'    <div style="color: var(--text-muted);">'
-            f'Exported from <span style="font-family: monospace;">{HE(hostname)}</span> on {now_date} at {now_time}'
-            f"</div>\n"
+            f"    <details>\n"
+            f'        <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
+            f'        <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
+            f'        <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
+            f'        <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
+            f"    </details>\n"
+            f"</section>\n"
+            f"</header>\n"
+            f"<main>\n"
         )
         fp.write("<ul>\n")
         for network_name, network_chats in sorted(
@@ -417,7 +434,7 @@ def write_chats_index(
             fp.write("</ul>\n")
             fp.write("</li>\n")
         fp.write("</ul>\n")
-        fp.write("</body></html>\n")
+        fp.write("</main></body></html>\n")
     return index_file_path
 
 
@@ -437,7 +454,7 @@ async def export_chat(
     output_root_dir: Path,
     resource_dir_path: Path,
     chat_summary: Chat,
-) -> (str, str):
+) -> tuple[str, Path]:
     chat = await client.chats.retrieve(chat_summary.id)
     messages = []
     with tqdm(desc="Gathering chat messages", leave=False) as progress:
@@ -481,7 +498,7 @@ async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) ->
 
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
-    include_chat_ids = set()
+    include_chat_ids: set[str] = set()
     # include_chat_ids.update((
     #     "",
     # ))
@@ -505,16 +522,19 @@ async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) ->
             chat_id_to_title[chat_summary.id] = chat_title
             chat_id_to_html_path[chat_summary.id] = html_path
 
+    time_end = datetime.now()
+    export_duration = time_end - time_start
+    info(f"Export took {export_duration}")
+
     chat_index_path = write_chats_index(
         output_root_dir,
         resource_dir_path,
+        time_start,
+        export_duration,
         chat_id_to_html_path,
         chat_id_to_title,
         chat_summaries,
     )
-
-    time_end = datetime.now()
-    info(f"Export took {time_end - time_start}")
 
     return chat_index_path
 
@@ -541,6 +561,7 @@ def check_beeper_version() -> None:
         )
 
 
+@no_type_check
 async def create_example(output_root_dir: Path):
     from test.mock import MockAsyncBeeperDesktop
 
@@ -553,12 +574,27 @@ async def create_example(output_root_dir: Path):
     index_html_path = await export_all_chats(client, output_root_dir)
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
-    output_html = re.sub(
-        r'monospace;">.*</span> on \d\d\d\d-\d\d-\d\d at \d\d:\d\d:\d\d</div>',
-        r'monospace;">circusmonkey</span> on 2025-09-07 at 23:12:06</div>',
-        output_html,
-        count=1,
+    re_subs = (
+        (
+            r"Export Host: </span>.*</div>",
+            r"Export Host: </span>circusmonkey</div>",
+        ),
+        (
+            r"Export Date: </span>\d\d\d\d-\d\d-\d\d</div>",
+            r"Export Date: </span>2025-09-07</div>",
+        ),
+        (
+            r"Export Time: </span>\d\d:\d\d:\d\d</div>",
+            r"Export Time: </span>23:12:06</div>",
+        ),
+        (
+            r"Export Duration: </span>\d:\d\d:\d\d\.\d*</div>",
+            r"Export Duration: </span>0:00:00.034469</div>",
+        ),
     )
+    for patt, rep in re_subs:
+        output_html = re.sub(patt, rep, output_html, count=1)
+
     with open(index_html_path, "w", encoding="utf-8") as fp:
         fp.write(output_html)
 
