@@ -496,16 +496,14 @@ async def export_chat(
     return chat_title, html_file_path
 
 
-async def export_all_chats(client: AsyncBeeperDesktop, output_root_dir: Path) -> Path:
+async def export_all_chats(
+    client: AsyncBeeperDesktop, output_root_dir: Path, include_chat_ids: set[str]
+) -> Path:
     info(f'Exporting chats to "{output_root_dir}"')
     time_start = datetime.now()
 
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
-    include_chat_ids: set[str] = set()
-    # include_chat_ids.update((
-    #     "",
-    # ))
     # Chats returned by list don't currently have all info associated with
     # them (e.g. participants list is truncated), so treating them as
     # summaries to be filled out with individual chats.retrieve(id) calls.
@@ -575,7 +573,7 @@ async def create_example(output_root_dir: Path):
         shutil.rmtree(output_root_dir)
 
     client = MockAsyncBeeperDesktop(test_data_path)
-    index_html_path = await export_all_chats(client, output_root_dir)
+    index_html_path = await export_all_chats(client, output_root_dir, set())
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
     re_subs = (
@@ -610,6 +608,15 @@ async def main():
         "--token",
         help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
     )
+    parser.add_argument(
+        "-i",
+        "--include_chat_id",
+        dest="include_chat_ids",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Chat ID to include (may be supplied multiple times)",
+    )
     parser.add_argument("--create_example", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
@@ -621,7 +628,7 @@ async def main():
         await create_example(args.output_root_dir)
     else:
         client = AsyncBeeperDesktop(access_token=cfg().access_token)
-        await export_all_chats(client, args.output_root_dir)
+        await export_all_chats(client, args.output_root_dir, set(args.include_chat_ids))
 
 
 if __name__ == "__main__":
