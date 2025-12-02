@@ -439,7 +439,7 @@ def write_chats_index(
 
 
 def copy_resource_files(target_dir_path: Path) -> Path:
-    source_dir_path = Path(__name__).parent / "css"
+    source_dir_path = Path(__file__).parent / "css"
     assert source_dir_path.is_dir()
     target_dir_path.mkdir(parents=True, exist_ok=True)
     for file_name in ("water.css", "extra.css"):
