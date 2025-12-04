@@ -63,7 +63,13 @@ def init_cfg(args) -> None:
     if args.token:
         access_token = args.token
     else:
-        load_dotenv()
+        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            # don't use _MEIPASS, which is where the single-file bundle is unpacked to
+            bin_path = Path(sys.executable)
+        else:
+            bin_path = Path(__file__)
+        env_file = bin_path.parent / ".env"
+        load_dotenv(dotenv_path=env_file)
         access_token = os.environ.get("BEEPER_ACCESS_TOKEN")
     if not access_token:
         fatal(
