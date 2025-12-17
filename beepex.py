@@ -23,6 +23,11 @@ from rich import traceback
 from tqdm import tqdm
 from tqdm.asyncio import tqdm_asyncio
 
+try:
+    from __version__ import __version__  # type: ignore
+except ModuleNotFoundError:
+    __version__ = "dev"
+
 traceback.install(
     show_locals=True,
     locals_max_length=3,
@@ -414,6 +419,7 @@ def write_chats_index(
             f'<section class="chat-header">\n'
             f"    <h1>Beeper Chats</h1>\n"
             f"    <details>\n"
+            f'        <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
             f'        <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
             f'        <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
             f'        <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
@@ -584,6 +590,10 @@ async def create_example(output_root_dir: Path):
         output_html = fp.read()
     re_subs = (
         (
+            r"beepex Version: </span>.*</div>",
+            r"beepex Version: </span>$VERSION</div>",
+        ),
+        (
             r"Export Host: </span>.*</div>",
             r"Export Host: </span>circusmonkey</div>",
         ),
@@ -608,8 +618,9 @@ async def create_example(output_root_dir: Path):
 
 
 async def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(prog="beepex")
     parser.add_argument("output_root_dir", type=Path)
+    parser.add_argument("-v", "--version", action="version", version=__version__)
     parser.add_argument(
         "--token",
         help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
