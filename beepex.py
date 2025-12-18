@@ -23,10 +23,11 @@ from rich import traceback
 from tqdm import tqdm
 from tqdm.asyncio import tqdm_asyncio
 
+__version__ = "dev"
 try:
     from __version__ import __version__  # type: ignore
 except ModuleNotFoundError:
-    __version__ = "dev"
+    pass
 
 traceback.install(
     show_locals=True,

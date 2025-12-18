@@ -11,7 +11,7 @@ class MockData:
     def __getattr__(self, name):
         value = self._data.get(name)
         if name == "timestamp":
-            value = datetime.fromisoformat(value)
+            value = datetime.fromisoformat(str(value))
         if isinstance(value, dict):
             return MockData(value)
         elif isinstance(value, list):
