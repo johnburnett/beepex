@@ -27,8 +27,9 @@ section.chat-header {
     border-radius: 5px;
 }
 
-details {
+details, summary {
     margin: 0px;
+    padding: 0px;
     background-color: var(--chat-header-background);
 }
 

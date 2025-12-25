@@ -353,7 +353,7 @@ async def chat_to_html(
     ctx.fout.write("<header>\n")
     ctx.fout.write('<section class="chat-header">\n')
     ctx.fout.write(f"<h1>{chat_title}</h1>\n")
-    ctx.fout.write("<details>\n")
+    ctx.fout.write("<details><summary>Details</summary>\n")
     ctx.fout.write(
         f'<div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
     )
@@ -419,7 +419,7 @@ def write_chats_index(
             f"<header>\n"
             f'<section class="chat-header">\n'
             f"    <h1>Beeper Chats</h1>\n"
-            f"    <details>\n"
+            f"    <details><summary>Details</summary>\n"
             f'        <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
             f'        <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
             f'        <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
