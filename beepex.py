@@ -254,7 +254,7 @@ def archive_attachment(
 
 async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     # from pprint import pformat
-    # ctx.fout.write(f'<section><pre>{pformat(msg)}</pre></section>\n')
+    # ctx.fout.write(f'<div><pre>{pformat(msg)}</pre></div>\n')
     # return
 
     sec_class = "msg-self" if msg.is_sender else "msg-them"
@@ -267,7 +267,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     if linked_message_id:
         replied_link = f'<a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>'
     ctx.fout.write(
-        f'<section class="msg {sec_class}">'
+        f'<div class="msg {sec_class}">'
         f'<div id="{HE(msg.id)}" class="msg-header">'
         f'<span class="msg-contact-name">{HE(msg.sender_name or "Unknown")}</span>'
         f"{replied_link}"
@@ -299,7 +299,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
             )
             if att.type == "img":
                 ctx.fout.write(
-                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}"/></a>\n'
+                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}" alt=""></a>\n'
                 )
             elif att.type == "video":
                 ctx.fout.write(
@@ -329,10 +329,10 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
             keys_to_names[reaction.reaction_key].append(name)
         for key, names in sorted(keys_to_names.items()):
             tooltip = f"{key}\n" + "\n".join(sorted(names))
-            ctx.fout.write(f'<div title="{HE(tooltip)}">{HE(key)}</div>')
+            ctx.fout.write(f'<span title="{HE(tooltip)}">{HE(key)}</span>')
         ctx.fout.write("</span>")
 
-    ctx.fout.write("</section>\n")
+    ctx.fout.write("</div>\n")
 
 
 async def chat_to_html(
@@ -357,7 +357,7 @@ async def chat_to_html(
     )
 
     ctx.fout.write("<header>\n")
-    ctx.fout.write('<section class="chat-header">\n')
+    ctx.fout.write('<div class="chat-header">\n')
     ctx.fout.write(f"<h1>{chat_title}</h1>\n")
     ctx.fout.write("<details><summary>Details</summary>\n")
     ctx.fout.write(
@@ -381,7 +381,7 @@ async def chat_to_html(
         ctx.fout.write(f"<li>{HE(name)}</li>\n")
     ctx.fout.write("</ul>\n")
     ctx.fout.write("</details>\n")
-    ctx.fout.write("</section>")
+    ctx.fout.write("</div>")
     ctx.fout.write("</header>\n")
 
     ctx.fout.write("<main>\n")
@@ -423,7 +423,7 @@ def write_chats_index(
             f"</head>\n"
             f"<body>\n"
             f"<header>\n"
-            f'<section class="chat-header">\n'
+            f'<div class="chat-header">\n'
             f"    <h1>Beeper Chats</h1>\n"
             f"    <details><summary>Details</summary>\n"
             f'        <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
@@ -432,7 +432,7 @@ def write_chats_index(
             f'        <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
             f'        <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
             f"    </details>\n"
-            f"</section>\n"
+            f"</div>\n"
             f"</header>\n"
             f"<main>\n"
         )

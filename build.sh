@@ -16,5 +16,6 @@ else
   uv run ruff check
   echo "__version__ = \"$(git describe --tags --always | cut -c 2-)\"" > __version__.py
   uv run python beepex.py --token STUB_TOKEN --create_example ./example
+  find ./example/ -name \*.html -exec uv run python test/validatehtml.py {} +
   uv run pyinstaller --noconfirm beepex.spec
 fi

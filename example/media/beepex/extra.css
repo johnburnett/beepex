@@ -20,7 +20,7 @@
    background-color: var(--msg-target-background);
 }
 
-section.chat-header {
+div.chat-header {
     background-color: var(--chat-header-background);
     margin-bottom: 1rem;
     padding: 0.5rem;
@@ -49,19 +49,19 @@ h2 {
     margin: 5px 0px;
 }
 
-section.msg {
+div.msg {
     margin-bottom: 1rem;
     width: 66%;
     padding: 0.5rem;
     border-radius: 5px;
 }
 
-section.msg-self {
+div.msg-self {
     margin-left: 32%;
     background-color: var(--msg-self-background);
 }
 
-section.msg-them {
+div.msg-them {
     background-color: var(--msg-them-background);
 }
 
@@ -82,7 +82,7 @@ span.msg-contact-name {
     font-weight: bold;
 }
 
-section.msg img {
+div.msg img {
     border-radius: 5px;
 }
 
