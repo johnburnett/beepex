@@ -12,6 +12,7 @@ import shutil
 import socket
 import sys
 from typing import no_type_check, NoReturn, TextIO
+import urllib.parse
 
 from beeper_desktop_api import AsyncBeeperDesktop
 from beeper_desktop_api.types import Attachment, Chat, ChatListResponse, Message, User
@@ -163,14 +164,19 @@ class ExportContext:
     resource_dir_path: Path
 
 
-HE = html.escape
-
 info = print
 
 
 def fatal(msg: str) -> NoReturn:
     print(msg)
     sys.exit(1)
+
+
+HE = html.escape
+
+
+def LQ(s):
+    return urllib.parse.quote(html.escape(s))
 
 
 def sanitize_file_name(file_name: str) -> str:
@@ -259,7 +265,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     replied_link = ""
     linked_message_id = getattr(msg, "linked_message_id", None)
     if linked_message_id:
-        replied_link = f'<a title="Reply to message {HE(linked_message_id)}" href="#{HE(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>'
+        replied_link = f'<a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>'
     ctx.fout.write(
         f'<section class="msg {sec_class}">'
         f'<div id="{HE(msg.id)}" class="msg-header">'
@@ -284,7 +290,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
             att_url = att_file_path.relative_to(
                 ctx.output_file_path.parent, walk_up=True
             ).as_posix()
-            att_url = html.escape(att_url)
+            att_url = LQ(att_url)
 
             dim_attr = (
                 f' width="{att.size.width}" height="{att.size.height}"'
@@ -332,7 +338,7 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
 async def chat_to_html(
     ctx: ExportContext, chat_title: str, chat: Chat, messages: list[Message]
 ) -> None:
-    css_dir = html.escape(
+    css_dir = LQ(
         ctx.resource_dir_path.relative_to(
             ctx.output_file_path.parent, walk_up=True
         ).as_posix()
@@ -401,7 +407,7 @@ def write_chats_index(
 
     index_file_path = output_root_dir / "index.html"
     with open(index_file_path, "w", encoding="utf-8") as fp:
-        css_dir = resource_dir_path.relative_to(output_root_dir).as_posix()
+        css_dir = LQ(resource_dir_path.relative_to(output_root_dir).as_posix())
         hostname = socket.gethostname()
         export_ymd = export_time.strftime("%Y-%m-%d")
         export_hms = export_time.strftime("%H:%M:%S")
@@ -412,8 +418,8 @@ def write_chats_index(
             f'    <meta charset="UTF-8">\n'
             f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f"    <title>Beeper Chats</title>\n"
-            f'    <link rel="stylesheet" href="{HE(css_dir)}/water.css">\n'
-            f'    <link rel="stylesheet" href="{HE(css_dir)}/extra.css">\n'
+            f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
+            f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
             f"</head>\n"
             f"<body>\n"
             f"<header>\n"
@@ -442,7 +448,7 @@ def write_chats_index(
                 chat_html_path = chat_id_to_html_path[chat.id]
                 chat_url = chat_html_path.relative_to(output_root_dir)
                 fp.write(
-                    f'<li><a href="{chat_url.as_posix()}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
+                    f'<li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
                 )
             fp.write("</ul>\n")
             fp.write("</li>\n")
