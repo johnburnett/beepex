@@ -488,15 +488,15 @@ async def export_chat(
     messages.sort(key=lambda message: message.timestamp)
 
     chat_title = get_chat_title(chat, messages)
-    chat_title_safe = sanitize_file_name(f"{chat_title} ({chat.id})")
+    chat_file_name = sanitize_file_name(chat.id)
     att_source_to_hydrated = await hydrate_chat_attachments(client, chat, messages)
 
     network_dir_name = sanitize_file_name(chat.network.lower())
     output_dir_path = output_root_dir / "chats" / network_dir_name
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
-    html_file_path = output_dir_path / (chat_title_safe + ".html")
-    attachment_dir_path = output_root_dir / "media" / network_dir_name / chat_title_safe
+    html_file_path = output_dir_path / (chat_file_name + ".html")
+    attachment_dir_path = output_root_dir / "media" / network_dir_name / chat_file_name
 
     with open(html_file_path, "w", encoding="utf-8") as fp:
         context = ExportContext(
