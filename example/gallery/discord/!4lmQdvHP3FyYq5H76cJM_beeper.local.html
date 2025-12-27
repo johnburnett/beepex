@@ -1,16 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Gallery: Four Yorkshiremen</title>
-  <link rel="stylesheet" href="../../media/beepex/water.css">
   <link rel="stylesheet" href="../../media/beepex/gallery.css">
 </head>
 <body>
+  <header>
+    <div class="wrap">
+      <h1>Four Yorkshiremen</h1>
+      <div id="search-bar">
+        <input id="search-text" type="search" placeholder="Filter..." />
+        <div id="search-count"></div>
+      </div>
+    </div>
+  </header>
   <main>
-    <ul class="gallery">
-  <li><img loading="lazy" width="470" height="390" src="../../media/discord/%214lmQdvHP3FyYq5H76cJM_beeper.local/2025-09-07_10-48-10_goodgood.png" alt="" /></li>
-  </ul></main>
+    <div class="wrap">
+      <div id="gallery-grid"></div>
+    </div>
+  </main>
+  <script>
+    window.CHAT_FILE_URL = "../../chat/discord/%214lmQdvHP3FyYq5H76cJM_beeper.local.html";
+    window.MEDIA_PREFIX = "../../media/discord/!4lmQdvHP3FyYq5H76cJM_beeper.local";
+    window.MEDIA = [
+["2025-09-07_10-48-10_goodgood.png","883"],
+    ]
+  </script>
+  <script src="../../media/beepex/gallery.js"></script>
 </body>
 </html>

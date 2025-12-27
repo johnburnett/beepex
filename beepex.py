@@ -365,7 +365,7 @@ async def write_chat_html(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
-        f'  <meta charset="UTF-8">\n'
+        f'  <meta charset="utf-8">\n'
         f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
         f"  <title>Chat: {chat_title}</title>\n"
         f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
@@ -380,7 +380,7 @@ async def write_chat_html(
         f'  <div class="chat-header">\n'
         f'    <div class="chat-header-title">\n'
         f"      <h1>{chat_title}</h1>\n"
-        f'      <a class="gallery-link" href="{gallery_html_file_rel}">Media Gallery</a>\n'
+        f'      <a class="gallery-link" href="{gallery_html_file_rel}">&#x25A6; Media Gallery</a>\n'
         f"    </div>\n"
         f"    <details><summary>Details</summary>\n"
         f'      <div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
@@ -409,6 +409,11 @@ async def write_gallery_html(
     chat: Chat,
     messages: list[Message],
 ) -> None:
+    chat_file_rel = LQ(
+        paths.chat_html_file.relative_to(
+            paths.gallery_html_file.parent, walk_up=True
+        ).as_posix()
+    )
     resource_dir_rel = LQ(
         paths.resource_dir.relative_to(
             paths.gallery_html_file.parent, walk_up=True
@@ -418,39 +423,52 @@ async def write_gallery_html(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
-        f'  <meta charset="UTF-8" />\n'
+        f'  <meta charset="utf-8" />\n'
         f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
         f"  <title>Gallery: {chat_title}</title>\n"
-        f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
         f'  <link rel="stylesheet" href="{resource_dir_rel}/gallery.css">\n'
         f"</head>\n"
         f"<body>\n"
+        f"  <header>\n"
+        f'    <div class="wrap">\n'
+        f"      <h1>{chat_title}</h1>\n"
+        f'      <div id="search-bar">\n'
+        f'        <input id="search-text" type="search" placeholder="Filter..." />\n'
+        f'        <div id="search-count"></div>\n'
+        f"      </div>\n"
+        f"    </div>\n"
+        f"  </header>\n"
         f"  <main>\n"
-        f'    <ul class="gallery">\n'
+        f'    <div class="wrap">\n'
+        f'      <div id="gallery-grid"></div>\n'
+        f"    </div>\n"
+        f"  </main>\n"
+        f"  <script>\n"
     )
     media_dir_rel = paths.media_dir.relative_to(
         paths.gallery_html_file.parent, walk_up=True
-    )
+    ).as_posix()
+    fout.write(f'    window.CHAT_FILE_URL = "{chat_file_rel}";\n')
+    fout.write(f'    window.MEDIA_PREFIX = "{media_dir_rel}";\n')
+    fout.write("    window.MEDIA = [\n")
+    # BBUG-3: works around multiple src_urls resolving to the same archive file path
+    seen_archive_urls = set()
     for msg in messages:
         for att in msg.attachments if msg.attachments else []:
-            if att.src_url:
+            if att.src_url and att.src_url not in seen_archive_urls:
+                seen_archive_urls.add(att.src_url)
                 archived_file_path = paths.att_source_to_archived[att.src_url]
                 if archived_file_path:
-                    archive_file_url = LQ(
-                        (
-                            media_dir_rel / os.path.basename(archived_file_path)
-                        ).as_posix()
+                    fout.write(
+                        f'["{os.path.basename(archived_file_path)}","{msg.id}"],\n'
                     )
-                    if att.type == "img":
-                        dim_attr = (
-                            f' width="{att.size.width}" height="{att.size.height}"'
-                            if att.size
-                            else ""
-                        )
-                        fout.write(
-                            f'  <li><img loading="lazy"{dim_attr} src="{archive_file_url}" alt="" /></li>\n'
-                        )
-    fout.write("  </ul></main>\n</body>\n</html>\n")
+    fout.write(
+        f"    ]\n"
+        f"  </script>\n"
+        f'  <script src="{resource_dir_rel}/gallery.js"></script>\n'
+        f"</body>\n"
+        f"</html>\n"
+    )
 
 
 def write_chats_index(
@@ -476,7 +494,7 @@ def write_chats_index(
             f"<!DOCTYPE html>\n"
             f'<html lang="en">\n'
             f"<head>\n"
-            f'  <meta charset="UTF-8">\n'
+            f'  <meta charset="utf-8">\n'
             f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
             f"  <title>Beeper Chats</title>\n"
             f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
@@ -521,10 +539,10 @@ def copy_resource_files(target_dir_path: Path) -> Path:
     source_dir_path = Path(__file__).parent / "resources"
     assert source_dir_path.is_dir()
     target_dir_path.mkdir(parents=True, exist_ok=True)
-    for file_name in os.listdir(source_dir_path):
-        source_file_path = source_dir_path / file_name
-        target_file_path = target_dir_path / file_name
-        shutil.copy(source_file_path, target_file_path)
+    for source_item in source_dir_path.iterdir():
+        if source_item.is_file():
+            target_file_path = target_dir_path / source_item.name
+            shutil.copy(source_item, target_file_path)
     return target_dir_path
 
 
@@ -536,7 +554,7 @@ async def export_chat(
 ) -> tuple[str, Path]:
     chat = await client.chats.retrieve(chat_summary.id)
     messages = []
-    # seen_ids and sorting by timestamp and not sort_key is to work around
+    # BBUG-1: seen_ids and sorting by timestamp and not sort_key is to work around
     # a bug with Beeper not filtering out messages or setting sort_key properly.
     seen_ids = set()
     with tqdm(desc="Gathering chat messages", leave=False) as progress:
@@ -707,7 +725,7 @@ async def main():
     args = parser.parse_args()
 
     init_cfg(args)
-    # todo
+    # BBUG-2
     # check_beeper_version()
 
     if args.create_example:
