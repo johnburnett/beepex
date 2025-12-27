@@ -1,6 +1,6 @@
 {
   "chat": {
-    "id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+    "id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
     "local_chat_id": "6998",
     "account_id": "discordgo",
     "network": "Discord",
@@ -53,7 +53,7 @@
     {
       "id": "56",
       "message_id": "56",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
       "sender_name": "Michael",
@@ -82,7 +82,7 @@
     {
       "id": "877",
       "message_id": "877",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
       "sender_name": "Graham",
@@ -94,7 +94,7 @@
     {
       "id": "881",
       "message_id": "881",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_terry_6495a1d5_cd1e_47f6_bf23_8c918348c66c",
       "sender_name": "Terry",
@@ -107,7 +107,7 @@
     {
       "id": "883",
       "message_id": "883",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_graham_024fe359_be5b_4b53_b1e4_d79c9c5ca647",
       "sender_name": "Graham",
@@ -142,7 +142,7 @@
     {
       "id": "13836",
       "message_id": "13836",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_eric_8a0a74e3_c2d0_41b1_9918_ebbdd2b747cd",
       "sender_name": "Eric",
@@ -154,7 +154,7 @@
     {
       "id": "13900",
       "message_id": "13900",
-      "chat_id": "chat_1ab466b6_5edf_4c26_abc5_169521057e30",
+      "chat_id": "!4lmQdvHP3FyYq5H76cJM:beeper.local",
       "account_id": "discordgo",
       "sender_id": "user_michael_3acca8a8_5a6e_4510_a396_902506a1a900",
       "sender_name": "Michael",

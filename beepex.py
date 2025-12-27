@@ -154,14 +154,16 @@ def is_message_blank(message: Message) -> bool:
     )
 
 
-@dataclass
-class ExportContext:
-    output_file_path: Path
-    fout: TextIO
-    attachment_dir_path: Path
+@dataclass(frozen=True, kw_only=True)
+class ExportPaths:
     # Map attachment source_url (which may not exist locally) to local hydrated file path
     att_source_to_hydrated: dict[str, Path | None]
-    resource_dir_path: Path
+    # Map attachment source_url to archived file path
+    att_source_to_archived: dict[str, Path | None]
+    resource_dir: Path
+    chat_html_file: Path
+    gallery_html_file: Path
+    media_dir: Path
 
 
 info = print
@@ -182,7 +184,7 @@ def LQ(s):
 def sanitize_file_name(file_name: str) -> str:
     if file_name.casefold() in FILE_NAME_RESERVED_NAMES:
         file_name = file_name + "_"
-    file_name = FILE_NAME_RESERVED_CHARS_RE.sub("", file_name)
+    file_name = FILE_NAME_RESERVED_CHARS_RE.sub("_", file_name)
     file_name = file_name.strip(" \t\n.")
     return file_name if file_name else "_"
 
@@ -228,33 +230,35 @@ async def hydrate_chat_attachments(
 
 
 def archive_attachment(
-    attachment_dir_path: Path,
+    media_dir_path: Path,
     att_source_to_hydrated: dict[str, Path | None],
     time_sent: datetime,
     att: Attachment,
 ) -> Path | None:
     if not att.src_url:
         return None
-    source_file_path = att_source_to_hydrated[att.src_url]
-    if not source_file_path:
+    hydrated_file_path = att_source_to_hydrated[att.src_url]
+    if not hydrated_file_path:
         return None
-    attachment_dir_path.mkdir(parents=True, exist_ok=True)
+    media_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
     target_file_name = (
         sanitize_file_name(f"{time_sent_str}_{target_file_name}") + target_file_ext
     )
-    target_file_path = attachment_dir_path / target_file_name
+    archived_file_path = media_dir_path / target_file_name
     mtime = time_sent.timestamp()
-    if not target_file_path.exists():
-        shutil.copy(source_file_path, target_file_path)
-        os.utime(target_file_path, times=(mtime, mtime))
-    return target_file_path
+    if not archived_file_path.exists():
+        shutil.copy(hydrated_file_path, archived_file_path)
+        os.utime(archived_file_path, times=(mtime, mtime))
+    return archived_file_path
 
 
-async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
+async def message_to_html(
+    fout: TextIO, paths: ExportPaths, chat: Chat, msg: Message
+) -> None:
     # from pprint import pformat
-    # ctx.fout.write(f'<div><pre>{pformat(msg)}</pre></div>\n')
+    # fout.write(f'<div><pre>{pformat(msg)}</pre></div>\n')
     # return
 
     sec_class = "msg-self" if msg.is_sender else "msg-them"
@@ -265,32 +269,37 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
     replied_link = ""
     linked_message_id = getattr(msg, "linked_message_id", None)
     if linked_message_id:
-        replied_link = f'<a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>'
-    ctx.fout.write(
-        f'<div class="msg {sec_class}">'
-        f'<div id="{HE(msg.id)}" class="msg-header">'
-        f'<span class="msg-contact-name">{HE(msg.sender_name or "Unknown")}</span>'
+        replied_link = f'    <a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>\n'
+    fout.write(
+        f'<div class="msg {sec_class}">\n'
+        f'  <div id="{HE(msg.id)}" class="msg-header">\n'
+        f'    <span class="msg-contact-name">{HE(msg.sender_name or "Unknown")}</span>\n'
         f"{replied_link}"
-        f'<span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>'
-        f'<a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>'
-        f"</div><div>\n"
+        f'    <span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>\n'
+        f'    <a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>\n'
+        f"  </div>\n"
+        f"  <div>\n"
     )
 
     if msg.text:
-        msg_text = html.escape(msg.text, quote=False)
+        msg_text = msg.text
+        msg_text = html.escape(msg_text, quote=False)
         msg_text = msg_text.replace("\n", "<br>\n")
         msg_text = bleach.linkify(msg_text)
-        ctx.fout.write(msg_text)
+        fout.write(msg_text)
 
     for att in msg.attachments if msg.attachments else []:
-        att_file_path = archive_attachment(
-            ctx.attachment_dir_path, ctx.att_source_to_hydrated, ts_local, att
+        archived_file_path = archive_attachment(
+            paths.media_dir, paths.att_source_to_hydrated, ts_local, att
         )
-        if att_file_path:
-            att_url = att_file_path.relative_to(
-                ctx.output_file_path.parent, walk_up=True
-            ).as_posix()
-            att_url = LQ(att_url)
+        if att.src_url:
+            paths.att_source_to_archived[att.src_url] = archived_file_path
+        if archived_file_path:
+            att_url = LQ(
+                archived_file_path.relative_to(
+                    paths.chat_html_file.parent, walk_up=True
+                ).as_posix()
+            )
 
             dim_attr = (
                 f' width="{att.size.width}" height="{att.size.height}"'
@@ -298,27 +307,27 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
                 else ""
             )
             if att.type == "img":
-                ctx.fout.write(
+                fout.write(
                     f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}" alt=""></a>\n'
                 )
             elif att.type == "video":
-                ctx.fout.write(
-                    f'<video controls loop playsinline{dim_attr} src="{att_url}"/>\n'
+                fout.write(
+                    f'<video controls loop playsinline{dim_attr} src="{att_url}"></video>\n'
                 )
             elif att.type == "audio":
-                ctx.fout.write(f'<audio controls src="{att_url}"/>\n')
+                fout.write(f'<audio controls src="{att_url}"/>\n')
         else:
-            ctx.fout.write(
+            fout.write(
                 f'<span class="error">&#x26A0;&#xFE0E; Missing Attachment: "{att.src_url}"</span>'
             )
 
-    ctx.fout.write("\n</div>")
+    fout.write("\n  </div>\n")
 
     if msg.reactions:
         user_id_to_full_name = {}
         for user in chat.participants.items:
             user_id_to_full_name[user.id] = user.full_name
-        ctx.fout.write('<span class="reactions">')
+        fout.write('  <span class="reactions">\n')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
             name = str(
@@ -328,68 +337,120 @@ async def message_to_html(ctx: ExportContext, chat: Chat, msg: Message) -> None:
             )
             keys_to_names[reaction.reaction_key].append(name)
         for key, names in sorted(keys_to_names.items()):
-            tooltip = f"{key}\n" + "\n".join(sorted(names))
-            ctx.fout.write(f'<span title="{HE(tooltip)}">{HE(key)}</span>')
-        ctx.fout.write("</span>")
+            tooltip = f"{key}&#10;" + "&#10;".join([HE(name) for name in sorted(names)])
+            fout.write(f'    <span title="{tooltip}">{HE(key)}</span>\n')
+        fout.write("  </span>")
 
-    ctx.fout.write("</div>\n")
+    fout.write("</div>\n")
 
 
-async def chat_to_html(
-    ctx: ExportContext, chat_title: str, chat: Chat, messages: list[Message]
+async def write_chat_html(
+    fout: TextIO,
+    paths: ExportPaths,
+    chat_title: str,
+    chat: Chat,
+    messages: list[Message],
 ) -> None:
-    css_dir = LQ(
-        ctx.resource_dir_path.relative_to(
-            ctx.output_file_path.parent, walk_up=True
+    resource_dir_rel = LQ(
+        paths.resource_dir.relative_to(
+            paths.chat_html_file.parent, walk_up=True
         ).as_posix()
     )
-    ctx.fout.write(
+    gallery_html_file_rel = LQ(
+        paths.gallery_html_file.relative_to(
+            paths.chat_html_file.parent, walk_up=True
+        ).as_posix()
+    )
+    fout.write(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
-        f'    <meta charset="UTF-8">\n'
-        f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"    <title>Chat: {chat_title}</title>\n"
-        f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
-        f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
+        f'  <meta charset="UTF-8">\n'
+        f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f"  <title>Chat: {chat_title}</title>\n"
+        f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
+        f'  <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
         f"</head>\n"
         f"<body>\n"
     )
 
-    ctx.fout.write("<header>\n")
-    ctx.fout.write('<div class="chat-header">\n')
-    ctx.fout.write(f"<h1>{chat_title}</h1>\n")
-    ctx.fout.write("<details><summary>Details</summary>\n")
-    ctx.fout.write(
-        f'<div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
-    )
-    ctx.fout.write(
-        f'<div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
-    )
-    ctx.fout.write(
-        f'<div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
-    )
-    ctx.fout.write(
-        f'<div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
-    )
     names = [get_user_name(user) for user in chat.participants.items]
-    ctx.fout.write(
-        f'<div><span class="chat-details-label">Participants: </span>{len(names)}</div>\n'
+    fout.write(
+        f"<header>\n"
+        f'  <div class="chat-header">\n'
+        f'    <div class="chat-header-title">\n'
+        f"      <h1>{chat_title}</h1>\n"
+        f'      <a class="gallery-link" href="{gallery_html_file_rel}">Media Gallery</a>\n'
+        f"    </div>\n"
+        f"    <details><summary>Details</summary>\n"
+        f'      <div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
+        f'      <div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
+        f'      <div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
+        f'      <div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
+        f'      <div><span class="chat-details-label">Participants: </span>{len(names)}</div>\n'
+        f"      <ul>\n"
     )
-    ctx.fout.write("<ul>\n")
     for name in sorted(names, key=lambda it: it.casefold()):
-        ctx.fout.write(f"<li>{HE(name)}</li>\n")
-    ctx.fout.write("</ul>\n")
-    ctx.fout.write("</details>\n")
-    ctx.fout.write("</div>")
-    ctx.fout.write("</header>\n")
+        fout.write(f"        <li>{HE(name)}</li>\n")
+    fout.write("      </ul>\n    </details>\n  </div></header>\n")
 
-    ctx.fout.write("<main>\n")
+    fout.write("<main>\n")
     for msg in tqdm(messages, desc="Writing chat messages", leave=False):
-        await message_to_html(ctx, chat, msg)
-    ctx.fout.write("</main>\n")
+        await message_to_html(fout, paths, chat, msg)
+    fout.write("</main>\n")
 
-    ctx.fout.write("</body></html>\n")
+    fout.write("</body></html>\n")
+
+
+async def write_gallery_html(
+    fout: TextIO,
+    paths: ExportPaths,
+    chat_title: str,
+    chat: Chat,
+    messages: list[Message],
+) -> None:
+    resource_dir_rel = LQ(
+        paths.resource_dir.relative_to(
+            paths.gallery_html_file.parent, walk_up=True
+        ).as_posix()
+    )
+    fout.write(
+        f"<!DOCTYPE html>\n"
+        f'<html lang="en">\n'
+        f"<head>\n"
+        f'  <meta charset="UTF-8" />\n'
+        f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f"  <title>Gallery: {chat_title}</title>\n"
+        f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
+        f'  <link rel="stylesheet" href="{resource_dir_rel}/gallery.css">\n'
+        f"</head>\n"
+        f"<body>\n"
+        f"  <main>\n"
+        f'    <ul class="gallery">\n'
+    )
+    media_dir_rel = paths.media_dir.relative_to(
+        paths.gallery_html_file.parent, walk_up=True
+    )
+    for msg in messages:
+        for att in msg.attachments if msg.attachments else []:
+            if att.src_url:
+                archived_file_path = paths.att_source_to_archived[att.src_url]
+                if archived_file_path:
+                    archive_file_url = LQ(
+                        (
+                            media_dir_rel / os.path.basename(archived_file_path)
+                        ).as_posix()
+                    )
+                    if att.type == "img":
+                        dim_attr = (
+                            f' width="{att.size.width}" height="{att.size.height}"'
+                            if att.size
+                            else ""
+                        )
+                        fout.write(
+                            f'  <li><img loading="lazy"{dim_attr} src="{archive_file_url}" alt="" /></li>\n'
+                        )
+    fout.write("  </ul></main>\n</body>\n</html>\n")
 
 
 def write_chats_index(
@@ -407,7 +468,7 @@ def write_chats_index(
 
     index_file_path = output_root_dir / "index.html"
     with open(index_file_path, "w", encoding="utf-8") as fp:
-        css_dir = LQ(resource_dir_path.relative_to(output_root_dir).as_posix())
+        resource_dir_rel = LQ(resource_dir_path.relative_to(output_root_dir).as_posix())
         hostname = socket.gethostname()
         export_ymd = export_time.strftime("%Y-%m-%d")
         export_hms = export_time.strftime("%H:%M:%S")
@@ -415,53 +476,52 @@ def write_chats_index(
             f"<!DOCTYPE html>\n"
             f'<html lang="en">\n'
             f"<head>\n"
-            f'    <meta charset="UTF-8">\n'
-            f'    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-            f"    <title>Beeper Chats</title>\n"
-            f'    <link rel="stylesheet" href="{css_dir}/water.css">\n'
-            f'    <link rel="stylesheet" href="{css_dir}/extra.css">\n'
+            f'  <meta charset="UTF-8">\n'
+            f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            f"  <title>Beeper Chats</title>\n"
+            f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
+            f'  <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
             f"</head>\n"
             f"<body>\n"
             f"<header>\n"
-            f'<div class="chat-header">\n'
+            f'  <div class="chat-header">\n'
             f"    <h1>Beeper Chats</h1>\n"
             f"    <details><summary>Details</summary>\n"
-            f'        <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
-            f'        <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
-            f'        <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
-            f'        <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
-            f'        <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
+            f'      <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
+            f'      <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
+            f'      <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
+            f'      <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
+            f'      <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
             f"    </details>\n"
-            f"</div>\n"
+            f"  </div>\n"
             f"</header>\n"
             f"<main>\n"
         )
-        fp.write("<ul>\n")
+        fp.write("  <ul>\n")
         for network_name, network_chats in sorted(
             network_to_chats.items(), key=lambda it: it[0].casefold()
         ):
-            fp.write(f"<li>{network_name}\n")
-            fp.write("<ul>\n")
+            fp.write(f"    <li>{network_name}\n")
+            fp.write("      <ul>\n")
             for chat in sorted(
                 network_chats, key=lambda chat: chat_id_to_title[chat.id].casefold()
             ):
                 chat_html_path = chat_id_to_html_path[chat.id]
                 chat_url = chat_html_path.relative_to(output_root_dir)
                 fp.write(
-                    f'<li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
+                    f'        <li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
                 )
-            fp.write("</ul>\n")
-            fp.write("</li>\n")
-        fp.write("</ul>\n")
-        fp.write("</main></body></html>\n")
+            fp.write("      </ul>\n")
+            fp.write("    </li>\n")
+        fp.write("  </ul>\n</main>\n</body></html>\n")
     return index_file_path
 
 
 def copy_resource_files(target_dir_path: Path) -> Path:
-    source_dir_path = Path(__file__).parent / "css"
+    source_dir_path = Path(__file__).parent / "resources"
     assert source_dir_path.is_dir()
     target_dir_path.mkdir(parents=True, exist_ok=True)
-    for file_name in ("water.css", "extra.css"):
+    for file_name in os.listdir(source_dir_path):
         source_file_path = source_dir_path / file_name
         target_file_path = target_dir_path / file_name
         shutil.copy(source_file_path, target_file_path)
@@ -489,30 +549,32 @@ async def export_chat(
 
     chat_title = get_chat_title(chat, messages)
     chat_file_name = sanitize_file_name(chat.id)
-    att_source_to_hydrated = await hydrate_chat_attachments(client, chat, messages)
-
     network_dir_name = sanitize_file_name(chat.network.lower())
-    output_dir_path = output_root_dir / "chats" / network_dir_name
-    output_dir_path.mkdir(parents=True, exist_ok=True)
+    chats_dir_path = output_root_dir / "chat" / network_dir_name
+    chats_dir_path.mkdir(parents=True, exist_ok=True)
+    galleries_dir_path = output_root_dir / "gallery" / network_dir_name
+    galleries_dir_path.mkdir(parents=True, exist_ok=True)
 
-    html_file_path = output_dir_path / (chat_file_name + ".html")
-    attachment_dir_path = output_root_dir / "media" / network_dir_name / chat_file_name
+    paths = ExportPaths(
+        att_source_to_hydrated=await hydrate_chat_attachments(client, chat, messages),
+        att_source_to_archived={},
+        resource_dir=resource_dir_path,
+        chat_html_file=chats_dir_path / (chat_file_name + ".html"),
+        gallery_html_file=galleries_dir_path / (chat_file_name + ".html"),
+        media_dir=output_root_dir / "media" / network_dir_name / chat_file_name,
+    )
+    with open(paths.chat_html_file, "w", encoding="utf-8") as fp:
+        await write_chat_html(fp, paths, chat_title, chat, messages)
+    assert len(paths.att_source_to_hydrated) == len(paths.att_source_to_archived)
 
-    with open(html_file_path, "w", encoding="utf-8") as fp:
-        context = ExportContext(
-            html_file_path,
-            fp,
-            attachment_dir_path,
-            att_source_to_hydrated,
-            resource_dir_path,
-        )
-        await chat_to_html(context, chat_title, chat, messages)
+    with open(paths.gallery_html_file, "w", encoding="utf-8") as fp:
+        await write_gallery_html(fp, paths, chat_title, chat, messages)
 
     if messages:
         mtime = messages[-1].timestamp.astimezone().timestamp()
-        os.utime(html_file_path, times=(mtime, mtime))
+        os.utime(paths.chat_html_file, times=(mtime, mtime))
 
-    return chat_title, html_file_path
+    return chat_title, paths.chat_html_file
 
 
 async def export_all_chats(

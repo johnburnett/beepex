@@ -98,3 +98,15 @@ span.reactions {
 span.error {
     color: var(--msg-error);
 }
+
+.chat-header-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gallery-link {
+  font-size: 0.9em;
+  white-space: nowrap;
+}

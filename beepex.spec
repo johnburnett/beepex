@@ -5,7 +5,7 @@ a = Analysis(
     ['beepex.py'],
     pathex=[],
     binaries=[],
-    datas=[('css/*.css', 'css')],
+    datas=[('resources/*', 'resources')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
