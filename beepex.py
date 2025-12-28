@@ -7,10 +7,12 @@ from datetime import datetime, timedelta
 import html
 import os
 from pathlib import Path
+import queue
 import re
 import shutil
 import socket
 import sys
+import threading
 from typing import no_type_check, NoReturn, TextIO
 import urllib.parse
 
@@ -19,6 +21,7 @@ from beeper_desktop_api.types import Attachment, Chat, ChatListResponse, Message
 import bleach
 from dotenv import load_dotenv
 from packaging import version
+from PIL import Image
 import requests
 from rich import traceback
 from tqdm import tqdm
@@ -47,6 +50,21 @@ class Config:
     request_headers: dict[str, str]
 
 
+@dataclass(frozen=True, kw_only=True)
+class ExportPaths:
+    # Map attachment src_url (which may not exist locally) to local hydrated file path
+    att_source_to_hydrated: dict[str, Path | None]
+    # Map attachment src_url to archived file path
+    att_source_to_archived: dict[str, Path | None]
+    # Set of src_urls that had thumbnails created for them
+    src_urls_with_thumbs: set[str]
+    resource_dir: Path
+    chat_html_file: Path
+    gallery_html_file: Path
+    media_dir: Path
+    thumb_dir: Path
+
+
 # fmt: off
 FILE_NAME_RESERVED_NAMES = {
     "aux", "con", "nul", "prn",
@@ -55,8 +73,10 @@ FILE_NAME_RESERVED_NAMES = {
 }
 # fmt: on
 FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
-
 CONFIG: Config | None = None
+MAX_THUMB_DIM = 256
+# png files are often screenshots with text, so keep the thumbnails larger for legibility
+MAX_PNG_THUMB_DIM = 512
 
 
 def cfg() -> Config:
@@ -85,6 +105,32 @@ def init_cfg(args) -> None:
     assert isinstance(access_token, str)
     headers = {"Authorization": f"Bearer {access_token}"}
     CONFIG = Config(access_token=access_token, request_headers=headers)
+
+
+def start_work_queue(*, num_threads=4):
+    def worker_proc(work_queue):
+        while True:
+            proc, args, kwargs = work_queue.get()
+            try:
+                proc(*args, **kwargs)
+            except Exception as ex:
+                try:
+                    while work_queue.get_nowait():
+                        work_queue.task_done()
+                except queue.Empty:
+                    pass
+                raise ex
+            finally:
+                work_queue.task_done()
+
+    work_queue = queue.Queue()
+    for ii in range(num_threads):
+        th = threading.Thread(
+            name="worker%d" % ii, target=worker_proc, args=(work_queue,)
+        )
+        th.daemon = True
+        th.start()
+    return work_queue
 
 
 def get_user_name(user: User) -> str:
@@ -152,18 +198,6 @@ def is_message_blank(message: Message) -> bool:
         and message.attachments is None
         and message.reactions is None
     )
-
-
-@dataclass(frozen=True, kw_only=True)
-class ExportPaths:
-    # Map attachment source_url (which may not exist locally) to local hydrated file path
-    att_source_to_hydrated: dict[str, Path | None]
-    # Map attachment source_url to archived file path
-    att_source_to_archived: dict[str, Path | None]
-    resource_dir: Path
-    chat_html_file: Path
-    gallery_html_file: Path
-    media_dir: Path
 
 
 info = print
@@ -240,7 +274,6 @@ def archive_attachment(
     hydrated_file_path = att_source_to_hydrated[att.src_url]
     if not hydrated_file_path:
         return None
-    media_dir_path.mkdir(parents=True, exist_ok=True)
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
     target_file_name = (
@@ -254,8 +287,37 @@ def archive_attachment(
     return archived_file_path
 
 
+def get_thumbnail_dim(media_file_path: Path) -> int | None:
+    suffix = media_file_path.suffix.casefold()
+    if suffix not in (".jpg", ".jpeg", ".png"):
+        return None
+    else:
+        return MAX_PNG_THUMB_DIM if suffix == ".png" else MAX_THUMB_DIM
+
+
+def get_thumbnail_file_path(media_file_path: Path, thumb_dir_path: Path) -> Path | None:
+    max_dim = get_thumbnail_dim(media_file_path)
+    if not max_dim:
+        return None
+    image = Image.open(media_file_path)
+    if image.width <= max_dim and image.height <= max_dim:
+        return None
+    else:
+        return thumb_dir_path / (media_file_path.stem + ".jpg")
+
+
+def create_thumbnail(media_file_path: Path, thumb_file_path: Path):
+    image = Image.open(media_file_path)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    max_dim = get_thumbnail_dim(media_file_path)
+    assert isinstance(max_dim, int)
+    image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS, reducing_gap=2.0)
+    image.save(thumb_file_path, quality="medium")
+
+
 async def message_to_html(
-    fout: TextIO, paths: ExportPaths, chat: Chat, msg: Message
+    fout: TextIO, work_queue: queue.Queue, paths: ExportPaths, chat: Chat, msg: Message
 ) -> None:
     # from pprint import pformat
     # fout.write(f'<div><pre>{pformat(msg)}</pre></div>\n')
@@ -295,10 +357,29 @@ async def message_to_html(
         if att.src_url:
             paths.att_source_to_archived[att.src_url] = archived_file_path
         if archived_file_path:
+            thumb_file_path = get_thumbnail_file_path(
+                archived_file_path, paths.thumb_dir
+            )
+            if thumb_file_path:
+                if att.src_url:
+                    paths.src_urls_with_thumbs.add(att.src_url)
+                work_queue.put(
+                    (create_thumbnail, (archived_file_path, thumb_file_path), {})
+                )
+
             att_url = LQ(
                 archived_file_path.relative_to(
                     paths.chat_html_file.parent, walk_up=True
                 ).as_posix()
+            )
+            thumb_url = (
+                LQ(
+                    thumb_file_path.relative_to(
+                        paths.chat_html_file.parent, walk_up=True
+                    ).as_posix()
+                )
+                if thumb_file_path
+                else att_url
             )
 
             dim_attr = (
@@ -308,7 +389,7 @@ async def message_to_html(
             )
             if att.type == "img":
                 fout.write(
-                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{att_url}" alt=""></a>\n'
+                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{thumb_url}" alt=""></a>\n'
                 )
             elif att.type == "video":
                 fout.write(
@@ -346,6 +427,7 @@ async def message_to_html(
 
 async def write_chat_html(
     fout: TextIO,
+    work_queue: queue.Queue,
     paths: ExportPaths,
     chat_title: str,
     chat: Chat,
@@ -396,7 +478,7 @@ async def write_chat_html(
 
     fout.write("<main>\n")
     for msg in tqdm(messages, desc="Writing chat messages", leave=False):
-        await message_to_html(fout, paths, chat, msg)
+        await message_to_html(fout, work_queue, paths, chat, msg)
     fout.write("</main>\n")
 
     fout.write("</body></html>\n")
@@ -448,8 +530,12 @@ async def write_gallery_html(
     media_dir_rel = paths.media_dir.relative_to(
         paths.gallery_html_file.parent, walk_up=True
     ).as_posix()
+    thumb_dir_rel = paths.thumb_dir.relative_to(
+        paths.gallery_html_file.parent, walk_up=True
+    ).as_posix()
     fout.write(f'    window.CHAT_FILE_URL = "{chat_file_rel}";\n')
     fout.write(f'    window.MEDIA_PREFIX = "{media_dir_rel}";\n')
+    fout.write(f'    window.THUMB_PREFIX = "{thumb_dir_rel}";\n')
     fout.write("    window.MEDIA = [\n")
     # BBUG-3: works around multiple src_urls resolving to the same archive file path
     seen_archive_urls = set()
@@ -458,9 +544,10 @@ async def write_gallery_html(
             if att.src_url and att.src_url not in seen_archive_urls:
                 seen_archive_urls.add(att.src_url)
                 archived_file_path = paths.att_source_to_archived[att.src_url]
+                has_thumb = att.src_url in paths.src_urls_with_thumbs
                 if archived_file_path:
                     fout.write(
-                        f'["{os.path.basename(archived_file_path)}","{msg.id}"],\n'
+                        f'["{os.path.basename(archived_file_path)}","{msg.id}",{1 if has_thumb else 0}],\n'
                     )
     fout.write(
         f"    ]\n"
@@ -548,6 +635,7 @@ def copy_resource_files(target_dir_path: Path) -> Path:
 
 async def export_chat(
     client: AsyncBeeperDesktop,
+    work_queue: queue.Queue,
     output_root_dir: Path,
     resource_dir_path: Path,
     chat_summary: Chat,
@@ -572,17 +660,27 @@ async def export_chat(
     chats_dir_path.mkdir(parents=True, exist_ok=True)
     galleries_dir_path = output_root_dir / "gallery" / network_dir_name
     galleries_dir_path.mkdir(parents=True, exist_ok=True)
+    media_dir_path = (
+        output_root_dir / "media" / "full" / network_dir_name / chat_file_name
+    )
+    media_dir_path.mkdir(parents=True, exist_ok=True)
+    thumb_dir_path = (
+        output_root_dir / "media" / "thumb" / network_dir_name / chat_file_name
+    )
+    thumb_dir_path.mkdir(parents=True, exist_ok=True)
 
     paths = ExportPaths(
         att_source_to_hydrated=await hydrate_chat_attachments(client, chat, messages),
         att_source_to_archived={},
+        src_urls_with_thumbs=set(),
         resource_dir=resource_dir_path,
         chat_html_file=chats_dir_path / (chat_file_name + ".html"),
         gallery_html_file=galleries_dir_path / (chat_file_name + ".html"),
-        media_dir=output_root_dir / "media" / network_dir_name / chat_file_name,
+        media_dir=media_dir_path,
+        thumb_dir=thumb_dir_path,
     )
     with open(paths.chat_html_file, "w", encoding="utf-8") as fp:
-        await write_chat_html(fp, paths, chat_title, chat, messages)
+        await write_chat_html(fp, work_queue, paths, chat_title, chat, messages)
     assert len(paths.att_source_to_hydrated) == len(paths.att_source_to_archived)
 
     with open(paths.gallery_html_file, "w", encoding="utf-8") as fp:
@@ -595,7 +693,7 @@ async def export_chat(
     return chat_title, paths.chat_html_file
 
 
-async def export_all_chats(
+async def export_chats(
     client: AsyncBeeperDesktop, output_root_dir: Path, include_chat_ids: set[str]
 ) -> Path:
     info(f'Exporting chats to "{output_root_dir}"')
@@ -615,13 +713,16 @@ async def export_all_chats(
     chat_id_to_title = {}
     chat_id_to_html_path = {}
     with tqdm(chat_summaries, leave=False) as progress:
+        work_queue = start_work_queue()
         for chat_summary in progress:
             progress.set_description(f'Chat "{chat_summary.id}"')
             chat_title, html_path = await export_chat(
-                client, output_root_dir, resource_dir_path, chat_summary
+                client, work_queue, output_root_dir, resource_dir_path, chat_summary
             )
             chat_id_to_title[chat_summary.id] = chat_title
             chat_id_to_html_path[chat_summary.id] = html_path
+        progress.set_description("Finishing thumbnail creation")
+        work_queue.join()
 
     time_end = datetime.now()
     export_duration = time_end - time_start
@@ -672,7 +773,7 @@ async def create_example(output_root_dir: Path):
         shutil.rmtree(output_root_dir)
 
     client = MockAsyncBeeperDesktop(test_data_path)
-    index_html_path = await export_all_chats(client, output_root_dir, set())
+    index_html_path = await export_chats(client, output_root_dir, set())
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
     re_subs = (
@@ -732,7 +833,7 @@ async def main():
         await create_example(args.output_root_dir)
     else:
         client = AsyncBeeperDesktop(access_token=cfg().access_token)
-        await export_all_chats(client, args.output_root_dir, set(args.include_chat_ids))
+        await export_chats(client, args.output_root_dir, set(args.include_chat_ids))
 
 
 if __name__ == "__main__":

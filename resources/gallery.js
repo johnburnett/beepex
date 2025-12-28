@@ -2,13 +2,19 @@
 
 const MEDIA = window.MEDIA.map(it => {
   return {
-    src: `${window.MEDIA_PREFIX}/${it[0]}`,
-    messageId: it[1]
+    fileName: it[0],
+    messageId: it[1],
+    hasThumb: Boolean(it[2]),
   }
 });
 const elGalleryGrid = document.getElementById("gallery-grid");
 const elSearchText = document.getElementById("search-text");
 const elSearchCount = document.getElementById("search-count");
+
+function stemOf(fileName) {
+  const i = fileName.lastIndexOf(".");
+  return i >= 0 ? fileName.slice(0, i).toLowerCase() : fileName;
+}
 
 function extOf(path) {
   const i = path.lastIndexOf(".");
@@ -23,7 +29,7 @@ function typeOf(path) {
   return "other";
 }
 
-function timestampFromPath(path) {
+function timestampFromFileName(path) {
   const filename = path.split("/").pop();
   const re = /^(?<date>\d{4}-\d{2}-\d{2})_(?<hour>\d{2})-(?<minute>\d{2})/;
   const match = filename.match(re);
@@ -47,27 +53,26 @@ function render() {
   elGalleryGrid.textContent = "";
 
   const query = elSearchText.value.trim().toLowerCase();
-  const filtered = MEDIA
-    .map((src, idx) => ({ ...src, idx }))
-    .filter(o => !query || o.src.toLowerCase().includes(query));
+  const filtered = MEDIA.filter(o => !query || o.fileName.toLowerCase().includes(query));
 
   elSearchCount.textContent = `${filtered.length.toLocaleString()} / ${MEDIA.length.toLocaleString()}`;
 
-  for (let i = 0; i < filtered.length; i++) {
-    const src = filtered[i].src;
-    const kind = typeOf(src);
+  for (const item of filtered) {
+    const kind = typeOf(item.fileName);
+    const mediaFileUrl = `${window.MEDIA_PREFIX}/${item.fileName}`;
+    const thumbFileUrl = item.hasThumb ? `${window.THUMB_PREFIX}/${stemOf(item.fileName)}.jpg` : mediaFileUrl;
 
     const elTile = document.createElement("div");
     elTile.className = "tile";
 
     const elTileBox = document.createElement("a");
     elTileBox.className = "tile-box";
-    elTileBox.href = src;
+    elTileBox.href = mediaFileUrl;
 
     if (kind == "image") {
       const elImg = document.createElement("img");
       elImg.loading = "lazy";
-      elImg.src = src;
+      elImg.src = thumbFileUrl;
 
       elTileBox.appendChild(elImg);
     } else if (kind == "video") {
@@ -81,7 +86,7 @@ function render() {
       elVideo.playsInline = true;
 
       const elSource = document.createElement("source");
-      elSource.src = src;
+      elSource.src = thumbFileUrl;
       elSource.type = "video/mp4";
 
       elVideo.appendChild(elSource);
@@ -96,12 +101,12 @@ function render() {
     const elBacklinkBadge = document.createElement("a");
     elBacklinkBadge.className = "backlink-badge";
     elBacklinkBadge.textContent = "\u{1F5E8}\uFE0E";
-    elBacklinkBadge.href = `${window.CHAT_FILE_URL}#${filtered[i].messageId}`;
+    elBacklinkBadge.href = `${window.CHAT_FILE_URL}#${item.messageId}`;
 
     const elLabel = document.createElement("div");
     elLabel.className = "tile-label";
 
-    elLabel.textContent = timestampFromPath(src);
+    elLabel.textContent = timestampFromFileName(item.fileName);
 
     elTileFooter.appendChild(elBacklinkBadge);
     elTileFooter.appendChild(elLabel);
