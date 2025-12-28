@@ -90,12 +90,15 @@ def init_cfg(args) -> None:
     if args.token:
         access_token = args.token
     else:
-        if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-            # don't use _MEIPASS, which is where the single-file bundle is unpacked to
-            bin_path = Path(sys.executable)
+        if args.env:
+            env_file = args.env
         else:
-            bin_path = Path(__file__)
-        env_file = bin_path.parent / ".env"
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                # don't use _MEIPASS, which is where the single-file bundle is unpacked to
+                bin_path = Path(sys.executable)
+            else:
+                bin_path = Path(__file__)
+            env_file = bin_path.parent / ".env"
         load_dotenv(dotenv_path=env_file)
         access_token = os.environ.get("BEEPER_ACCESS_TOKEN")
     if not access_token:
@@ -811,7 +814,12 @@ async def main():
     parser.add_argument("-v", "--version", action="version", version=__version__)
     parser.add_argument(
         "--token",
-        help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file.",
+        help="Beeper Desktop API access token.  If not provided, uses the BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file if it is next to the beepex executable.",
+    )
+    parser.add_argument(
+        "--env",
+        type=Path,
+        help="Path to an env file that contains a definition of the BEEPER_ACCESS_TOKEN environment variable.",
     )
     parser.add_argument(
         "-i",
