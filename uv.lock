@@ -33,6 +33,15 @@ wheels = [
 ]
 
 [[package]]
+name = "argparse-formatter"
+version = "1.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/17/85/b57378b2be4e14fdf6a03d6bbf2147e1c9e5d6e812dd1a89e0382fe91153/argparse_formatter-1.5.tar.gz", hash = "sha256:877164d0a983689d3f48070f959c2d165dffc6074813b4479088d105b6a3dbff", size = 12020, upload-time = "2025-12-20T19:02:38.987Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/9e/55d62e096f32596bbf9dfc046c4fb9b3b0edffe915a98eb63f4cc392b4ae/argparse_formatter-1.5-py3-none-any.whl", hash = "sha256:52b48e7834e40d4a61d22b8e13f9eff9bd6e170b1be5717861c546fc6722f635", size = 11457, upload-time = "2025-12-20T19:02:37.96Z" },
+]
+
+[[package]]
 name = "beeper-desktop-api"
 version = "4.1.296"
 source = { registry = "https://pypi.org/simple" }
@@ -54,6 +63,7 @@ name = "beepex"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "argparse-formatter" },
     { name = "beeper-desktop-api" },
     { name = "bleach" },
     { name = "packaging" },
@@ -77,6 +87,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "argparse-formatter", specifier = ">=1.5" },
     { name = "beeper-desktop-api", specifier = ">=4.1.296" },
     { name = "bleach", specifier = ">=6.2.0" },
     { name = "packaging", specifier = ">=25.0" },

@@ -13,11 +13,12 @@ import shutil
 import socket
 import sys
 import threading
-from typing import no_type_check, NoReturn, TextIO
+from typing import no_type_check, NewType, NoReturn, TextIO, Union
 import urllib.parse
 
+from argparse_formatter import FlexiFormatter
 from beeper_desktop_api import AsyncBeeperDesktop
-from beeper_desktop_api.types import Attachment, Chat, ChatListResponse, Message, User
+from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
 from dotenv import load_dotenv
 from packaging import version
@@ -63,6 +64,20 @@ class ExportPaths:
     gallery_html_file: Path
     media_dir: Path
     thumb_dir: Path
+
+
+AccountID = NewType("AccountID", str)
+ChatID = NewType("ChatID", str)
+UserID = NewType("UserID", str)
+
+
+# fmt: off
+class IncludeAccountSet(set): ...
+class ExcludeAccountSet(set): ...
+class IncludeChatSet(set): ...
+class ExcludeChatSet(set): ...
+IncludeExcludeSet = Union[IncludeAccountSet | ExcludeAccountSet | IncludeChatSet | ExcludeChatSet]
+# fmt: on
 
 
 # fmt: off
@@ -136,6 +151,48 @@ def start_work_queue(*, num_threads=4):
     return work_queue
 
 
+def filter_chat_ids(
+    all_chat_ids: set[ChatID],
+    chat_id_to_account_id: dict[ChatID, AccountID],
+    include_exclude_sets: list[IncludeExcludeSet],
+) -> set[ChatID]:
+    if len(include_exclude_sets) == 0:
+        return set(all_chat_ids)
+
+    if isinstance(include_exclude_sets[0], (ExcludeAccountSet, ExcludeChatSet)):
+        chat_ids = set(all_chat_ids)
+    else:
+        chat_ids = set()
+
+    account_id_to_chat_ids = defaultdict(set)
+    for chat_id, account_id in chat_id_to_account_id.items():
+        account_id_to_chat_ids[account_id].add(chat_id)
+
+    for ie_set in include_exclude_sets:
+        if isinstance(ie_set, IncludeChatSet):
+            for chat_id in ie_set:
+                if chat_id not in all_chat_ids:
+                    fatal(f'Unknown chat ID: "{chat_id}"')
+            chat_ids.update(ie_set)
+        elif isinstance(ie_set, ExcludeChatSet):
+            chat_ids.difference_update(ie_set)
+        elif isinstance(ie_set, IncludeAccountSet):
+            for account_id in ie_set:
+                account_chat_ids = account_id_to_chat_ids.get(account_id)
+                if account_chat_ids is None:
+                    fatal(f'Unknown account ID: "{account_id}"')
+                else:
+                    chat_ids.update(account_chat_ids)
+        elif isinstance(ie_set, ExcludeAccountSet):
+            for account_id in ie_set:
+                account_chat_ids = account_id_to_chat_ids.get(account_id)
+                if account_chat_ids is None:
+                    fatal(f'Unknown account ID: "{account_id}"')
+                else:
+                    chat_ids.difference_update(account_chat_ids)
+    return chat_ids
+
+
 def get_user_name(user: User) -> str:
     attr_names = (
         "full_name",
@@ -152,8 +209,8 @@ def get_user_name(user: User) -> str:
 
 
 def get_chat_top_sender_ids(
-    chat: Chat, messages: list[Message], self_id: str, max_senders: int
-) -> list[str]:
+    chat: Chat, messages: list[Message], self_id: UserID, max_senders: int
+) -> list[UserID]:
     # using defaultdict here because sometimes there are messages associated
     # with a chat that are sent by a user who isn't listed in the chat
     # participants.  We also prime the dict with all participants, because
@@ -181,9 +238,11 @@ def get_chat_title(chat: Chat, messages: list[Message]) -> str:
     if self_user and chat.title == self_user.full_name:
         max_senders_in_title = 4
         top_sender_ids = get_chat_top_sender_ids(
-            chat, messages, self_user.id, max_senders_in_title
+            chat, messages, UserID(self_user.id), max_senders_in_title
         )
-        id_to_name = {user.id: user.full_name for user in chat.participants.items}
+        id_to_name: dict[UserID, str] = {
+            UserID(user.id): str(user.full_name) for user in chat.participants.items
+        }
         # Note: participants list doesn't include all participants?
         # e.g. '@discordgobot:beeper.local' has been seen sending a message
         # with this chat's chat_id, but it isn't in the returned chat participant list).
@@ -408,15 +467,15 @@ async def message_to_html(
     fout.write("\n  </div>\n")
 
     if msg.reactions:
-        user_id_to_full_name = {}
+        user_id_to_full_name: dict[UserID, str] = {}
         for user in chat.participants.items:
-            user_id_to_full_name[user.id] = user.full_name
+            user_id_to_full_name[UserID(user.id)] = str(user.full_name)
         fout.write('  <span class="reactions">\n')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
             name = str(
                 user_id_to_full_name.get(
-                    reaction.participant_id, reaction.participant_id
+                    UserID(reaction.participant_id), reaction.participant_id
                 )
             )
             keys_to_names[reaction.reaction_key].append(name)
@@ -468,7 +527,6 @@ async def write_chat_html(
         f'      <a class="gallery-link" href="{gallery_html_file_rel}">&#x25A6; Media Gallery</a>\n'
         f"    </div>\n"
         f"    <details><summary>Details</summary>\n"
-        f'      <div><span class="chat-details-label">Network: </span>{HE(chat.network)}</div>\n'
         f'      <div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
         f'      <div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
         f'      <div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
@@ -566,14 +624,12 @@ def write_chats_index(
     resource_dir_path: Path,
     export_time: datetime,
     export_duration: timedelta,
-    chat_id_to_html_path: dict[str, Path],
-    chat_id_to_title: dict[str, str],
-    chats: list[ChatListResponse],
+    chat_id_to_html_path: dict[ChatID, Path],
+    chat_id_to_title: dict[ChatID, str],
+    chat_ids: set[ChatID],
+    chat_id_to_account_id: dict[ChatID, AccountID],
+    account_id_to_name: dict[AccountID, str],
 ) -> Path:
-    network_to_chats: dict[str, list[ChatListResponse]] = {}
-    for chat in chats:
-        network_to_chats.setdefault(chat.network, []).append(chat)
-
     index_file_path = output_root_dir / "index.html"
     with open(index_file_path, "w", encoding="utf-8") as fp:
         resource_dir_rel = LQ(resource_dir_path.relative_to(output_root_dir).as_posix())
@@ -605,19 +661,26 @@ def write_chats_index(
             f"</header>\n"
             f"<main>\n"
         )
+
+        account_id_to_chat_ids = defaultdict(list)
+        for chat_id in chat_ids:
+            account_id = chat_id_to_account_id[chat_id]
+            account_id_to_chat_ids[account_id].append(chat_id)
+
         fp.write("  <ul>\n")
-        for network_name, network_chats in sorted(
-            network_to_chats.items(), key=lambda it: it[0].casefold()
+        for account_id, account_chat_ids in sorted(
+            account_id_to_chat_ids.items(),
+            key=lambda it: account_id_to_name[it[0]].casefold(),
         ):
-            fp.write(f"    <li>{network_name}\n")
+            fp.write(f"    <li>{account_id_to_name[account_id]}\n")
             fp.write("      <ul>\n")
-            for chat in sorted(
-                network_chats, key=lambda chat: chat_id_to_title[chat.id].casefold()
+            for chat_id in sorted(
+                account_chat_ids, key=lambda cid: chat_id_to_title[cid].casefold()
             ):
-                chat_html_path = chat_id_to_html_path[chat.id]
+                chat_html_path = chat_id_to_html_path[chat_id]
                 chat_url = chat_html_path.relative_to(output_root_dir)
                 fp.write(
-                    f'        <li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat.id])}</a></li>\n'
+                    f'        <li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat_id])}</a></li>\n'
                 )
             fp.write("      </ul>\n")
             fp.write("    </li>\n")
@@ -641,9 +704,9 @@ async def export_chat(
     work_queue: queue.Queue,
     output_root_dir: Path,
     resource_dir_path: Path,
-    chat_summary: Chat,
+    chat_id: ChatID,
 ) -> tuple[str, Path]:
-    chat = await client.chats.retrieve(chat_summary.id)
+    chat = await client.chats.retrieve(chat_id)
     messages = []
     # BBUG-1: seen_ids and sorting by timestamp and not sort_key is to work around
     # a bug with Beeper not filtering out messages or setting sort_key properly.
@@ -658,17 +721,17 @@ async def export_chat(
 
     chat_title = get_chat_title(chat, messages)
     chat_file_name = sanitize_file_name(chat.id)
-    network_dir_name = sanitize_file_name(chat.network.lower())
-    chats_dir_path = output_root_dir / "chat" / network_dir_name
+    account_dir_name = sanitize_file_name(chat.account_id.lower())
+    chats_dir_path = output_root_dir / "chat" / account_dir_name
     chats_dir_path.mkdir(parents=True, exist_ok=True)
-    galleries_dir_path = output_root_dir / "gallery" / network_dir_name
+    galleries_dir_path = output_root_dir / "gallery" / account_dir_name
     galleries_dir_path.mkdir(parents=True, exist_ok=True)
     media_dir_path = (
-        output_root_dir / "media" / "full" / network_dir_name / chat_file_name
+        output_root_dir / "media" / "full" / account_dir_name / chat_file_name
     )
     media_dir_path.mkdir(parents=True, exist_ok=True)
     thumb_dir_path = (
-        output_root_dir / "media" / "thumb" / network_dir_name / chat_file_name
+        output_root_dir / "media" / "thumb" / account_dir_name / chat_file_name
     )
     thumb_dir_path.mkdir(parents=True, exist_ok=True)
 
@@ -697,7 +760,9 @@ async def export_chat(
 
 
 async def export_chats(
-    client: AsyncBeeperDesktop, output_root_dir: Path, include_chat_ids: set[str]
+    client: AsyncBeeperDesktop,
+    output_root_dir: Path,
+    include_exclude_sets: list[IncludeExcludeSet],
 ) -> Path:
     info(f'Exporting chats to "{output_root_dir}"')
     time_start = datetime.now()
@@ -705,25 +770,30 @@ async def export_chats(
     resource_dir_path = copy_resource_files(output_root_dir / "media/beepex")
 
     # Chats returned by list don't currently have all info associated with
-    # them (e.g. participants list is truncated), so treating them as
-    # summaries to be filled out with individual chats.retrieve(id) calls.
-    chat_summaries = []
-    async for chat_summary in client.chats.list():
-        if include_chat_ids and chat_summary.id not in include_chat_ids:
-            continue
-        chat_summaries.append(chat_summary)
+    # them (e.g. participants list is truncated), so using this just to get
+    # the chat IDs, to be filled out with individual chats.retrieve(id) calls.
+    all_chat_ids = set()
+    chat_id_to_account_id = dict()
+    account_id_to_name: dict[AccountID, str] = dict()
+    async for chat in client.chats.list():
+        all_chat_ids.add(chat.id)
+        chat_id_to_account_id[chat.id] = chat.account_id
+        account_id_to_name[AccountID(chat.account_id)] = str(chat.network)
+    chat_ids = filter_chat_ids(
+        all_chat_ids, chat_id_to_account_id, include_exclude_sets
+    )
 
     chat_id_to_title = {}
     chat_id_to_html_path = {}
-    with tqdm(chat_summaries, leave=False) as progress:
+    with tqdm(chat_ids, leave=False) as progress:
         work_queue = start_work_queue()
-        for chat_summary in progress:
-            progress.set_description(f'Chat "{chat_summary.id}"')
+        for chat_id in progress:
+            progress.set_description(f'Chat "{chat_id}"')
             chat_title, html_path = await export_chat(
-                client, work_queue, output_root_dir, resource_dir_path, chat_summary
+                client, work_queue, output_root_dir, resource_dir_path, chat_id
             )
-            chat_id_to_title[chat_summary.id] = chat_title
-            chat_id_to_html_path[chat_summary.id] = html_path
+            chat_id_to_title[chat_id] = chat_title
+            chat_id_to_html_path[chat_id] = html_path
         progress.set_description("Finishing thumbnail creation")
         work_queue.join()
 
@@ -738,7 +808,9 @@ async def export_chats(
         export_duration,
         chat_id_to_html_path,
         chat_id_to_title,
-        chat_summaries,
+        chat_ids,
+        chat_id_to_account_id,
+        account_id_to_name,
     )
 
     return chat_index_path
@@ -776,7 +848,7 @@ async def create_example(output_root_dir: Path):
         shutil.rmtree(output_root_dir)
 
     client = MockAsyncBeeperDesktop(test_data_path)
-    index_html_path = await export_chats(client, output_root_dir, set())
+    index_html_path = await export_chats(client, output_root_dir, [])
     with open(index_html_path, encoding="utf-8") as fp:
         output_html = fp.read()
     re_subs = (
@@ -808,8 +880,38 @@ async def create_example(output_root_dir: Path):
         fp.write(output_html)
 
 
+class IncludeExcludeSetArg(argparse.Action):
+    arg_to_type = {
+        "--include_account_ids": IncludeAccountSet,
+        "--exclude_account_ids": ExcludeAccountSet,
+        "--include_chat_ids": IncludeChatSet,
+        "--exclude_chat_ids": ExcludeChatSet,
+    }
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        dest_list = getattr(namespace, self.dest, None)
+        if dest_list is None:
+            dest_list = []
+            setattr(namespace, self.dest, dest_list)
+        assert option_string in self.arg_to_type
+        set_type = self.arg_to_type[option_string]
+        dest_list.append(set_type(values))
+
+    def format_usage(self):
+        return self.option_strings[0]
+
+
 async def main():
-    parser = argparse.ArgumentParser(prog="beepex")
+    parser = argparse.ArgumentParser(
+        prog="beepex",
+        formatter_class=FlexiFormatter,
+        epilog="""
+The include/exclude arguments are processed in the order given, and may be used multiple times.  The starting set of chats to include depends upon the first include/exclude argument that is used:
+- If the first is an "include_" type, the include/excludes are "building up" the set of chat IDs from nothing.
+- If the first is an "exclude_" type, the include/excludes are "pruning down" the set of chat IDs from all possible chats.
+- In either case, subsequent includes can re-add chats that were previously excluded, and vice-versa.
+""",
+    )
     parser.add_argument("output_root_dir", type=Path)
     parser.add_argument("-v", "--version", action="version", version=__version__)
     parser.add_argument(
@@ -821,16 +923,39 @@ async def main():
         type=Path,
         help="Path to an env file that contains a definition of the BEEPER_ACCESS_TOKEN environment variable.",
     )
-    parser.add_argument(
-        "-i",
-        "--include_chat_id",
-        dest="include_chat_ids",
-        action="append",
-        default=[],
-        metavar="ID",
-        help="Chat ID to include (may be supplied multiple times)",
-    )
     parser.add_argument("--create_example", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--include_account_ids",
+        dest="include_exclude_sets",
+        action=IncludeExcludeSetArg,
+        default=[],
+        nargs="+",
+        metavar="AccountID",
+    )
+    parser.add_argument(
+        "--exclude_account_ids",
+        dest="include_exclude_sets",
+        action=IncludeExcludeSetArg,
+        default=[],
+        nargs="+",
+        metavar="AccountID",
+    )
+    parser.add_argument(
+        "--include_chat_ids",
+        dest="include_exclude_sets",
+        action=IncludeExcludeSetArg,
+        default=[],
+        nargs="+",
+        metavar="ChatID",
+    )
+    parser.add_argument(
+        "--exclude_chat_ids",
+        dest="include_exclude_sets",
+        action=IncludeExcludeSetArg,
+        default=[],
+        nargs="+",
+        metavar="ChatID",
+    )
     args = parser.parse_args()
 
     init_cfg(args)
@@ -841,7 +966,7 @@ async def main():
         await create_example(args.output_root_dir)
     else:
         client = AsyncBeeperDesktop(access_token=cfg().access_token)
-        await export_chats(client, args.output_root_dir, set(args.include_chat_ids))
+        await export_chats(client, args.output_root_dir, args.include_exclude_sets)
 
 
 if __name__ == "__main__":
