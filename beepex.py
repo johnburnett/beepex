@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 from collections import defaultdict
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import hashlib
@@ -31,7 +32,7 @@ from tqdm.asyncio import tqdm_asyncio
 
 __version__ = "dev"
 try:
-    from __version__ import __version__  # type: ignore
+    from __version__ import __version__
 except ModuleNotFoundError:
     pass
 
@@ -93,6 +94,19 @@ CONFIG: Config | None = None
 MAX_THUMB_DIM = 256
 # png files are often screenshots with text, so keep the thumbnails larger for legibility
 MAX_PNG_THUMB_DIM = 512
+USER_ID_TO_NAME_OVERRIDE: dict[UserID, str] = {}
+
+
+info = print
+
+
+def warn(msg: str) -> None:
+    print("WARNING:", msg)
+
+
+def fatal(msg: str) -> NoReturn:
+    print("FATAL:", msg)
+    sys.exit(1)
 
 
 def cfg() -> Config:
@@ -124,6 +138,23 @@ def init_cfg(args) -> None:
     assert isinstance(access_token, str)
     headers = {"Authorization": f"Bearer {access_token}"}
     CONFIG = Config(access_token=access_token, request_headers=headers)
+
+
+def parse_chat_id_names_remap(file_path: Path) -> None:
+    try:
+        with open(file_path, encoding="utf-8", newline="") as fp:
+            reader = csv.reader(fp)
+            for line_no, row in enumerate(reader, start=1):
+                if len(row) != 2:
+                    fatal(
+                        f"Line {line_no} of chat names remap file has {len(row)} items, expected 2."
+                    )
+                user_id, user_name = row
+                USER_ID_TO_NAME_OVERRIDE[user_id] = user_name
+        if not USER_ID_TO_NAME_OVERRIDE:
+            warn("chat names remap file was read as empty")
+    except FileNotFoundError:
+        fatal(f'File not found: "{file_path}"')
 
 
 def start_work_queue(*, num_threads=4):
@@ -195,18 +226,22 @@ def filter_chat_ids(
 
 
 def get_user_name(user: User) -> str:
-    attr_names = (
-        "full_name",
-        "username",
-        "email",
-        "phone_number",
-        "id",
-    )
-    for attr_name in attr_names:
-        value = getattr(user, attr_name)
-        if value:
-            return value
-    assert False
+    name = USER_ID_TO_NAME_OVERRIDE.get(UserID(user.id))
+    if name is not None:
+        return name
+    else:
+        attr_names = (
+            "full_name",
+            "username",
+            "email",
+            "phone_number",
+            "id",
+        )
+        for attr_name in attr_names:
+            value = getattr(user, attr_name)
+            if value:
+                return value
+        assert False
 
 
 def get_chat_top_sender_ids(
@@ -236,13 +271,19 @@ def get_chat_title(chat: Chat, messages: list[Message]) -> str:
             break
 
     full_title = chat.title
-    if self_user and chat.title == self_user.full_name:
+    if (
+        self_user and chat.title == self_user.full_name
+    ) or full_title == "Unknown user":
+        self_user_id = UserID(getattr(self_user, "id"))
         max_senders_in_title = 4
         top_sender_ids = get_chat_top_sender_ids(
-            chat, messages, UserID(self_user.id), max_senders_in_title
+            chat, messages, self_user_id, max_senders_in_title
         )
-        id_to_name: dict[UserID, str] = {
-            UserID(user.id): str(user.full_name) for user in chat.participants.items
+        id_to_name = {
+            UserID(user.id): USER_ID_TO_NAME_OVERRIDE.get(
+                UserID(user.id), str(user.full_name)
+            )
+            for user in chat.participants.items
         }
         # Note: participants list doesn't include all participants?
         # e.g. '@discordgobot:beeper.local' has been seen sending a message
@@ -261,14 +302,6 @@ def is_message_blank(message: Message) -> bool:
         and message.attachments is None
         and message.reactions is None
     )
-
-
-info = print
-
-
-def fatal(msg: str) -> NoReturn:
-    print(msg)
-    sys.exit(1)
 
 
 HE = html.escape
@@ -386,10 +419,6 @@ def create_thumbnail(media_file_path: Path, thumb_file_path: Path):
 async def message_to_html(
     fout: TextIO, work_queue: queue.Queue, paths: ExportPaths, chat: Chat, msg: Message
 ) -> None:
-    # from pprint import pformat
-    # fout.write(f'<div><pre>{pformat(msg)}</pre></div>\n')
-    # return
-
     sec_class = "msg-self" if msg.is_sender else "msg-them"
     ts_utc = msg.timestamp
     ts_local = ts_utc.astimezone()
@@ -399,10 +428,12 @@ async def message_to_html(
     linked_message_id = getattr(msg, "linked_message_id", None)
     if linked_message_id:
         replied_link = f'    <a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>\n'
+    sender_name = USER_ID_TO_NAME_OVERRIDE.get(UserID(msg.sender_id), msg.sender_name)
+    assert isinstance(sender_name, str)
     fout.write(
         f'<div class="msg {sec_class}">\n'
         f'  <div id="{HE(msg.id)}" class="msg-header">\n'
-        f'    <span class="msg-contact-name">{HE(msg.sender_name or "Unknown")}</span>\n'
+        f'    <span class="msg-contact-name">{HE(sender_name)}</span>\n'
         f"{replied_link}"
         f'    <span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>\n'
         f'    <a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>\n'
@@ -523,7 +554,7 @@ async def write_chat_html(
         f"<body>\n"
     )
 
-    names = [get_user_name(user) for user in chat.participants.items]
+    user_names = [get_user_name(user) for user in chat.participants.items]
     fout.write(
         f"<header>\n"
         f'  <div class="chat-header">\n'
@@ -535,11 +566,32 @@ async def write_chat_html(
         f'      <div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
         f'      <div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
         f'      <div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
-        f'      <div><span class="chat-details-label">Participants: </span>{len(names)}</div>\n'
+        f'      <div><span class="chat-details-label">Participants: </span>{len(user_names)}</div>\n'
         f"      <ul>\n"
     )
-    for name in sorted(names, key=lambda it: it.casefold()):
-        fout.write(f"        <li>{HE(name)}</li>\n")
+    for user_name, user in sorted(
+        zip(user_names, chat.participants.items), key=lambda it: it[0].casefold()
+    ):
+        fout.write(
+            f'        <li class="user-details">\n'
+            f'          <details class="user-details">\n'
+            f'            <summary class="user-details">{HE(user_name)}</summary>\n'
+        )
+        user_attrs = {
+            "id": "Beeper ID",
+            "email": "User E-mail",
+            "fullName": "Full Name",
+            "phoneNumber": "Phone Number",
+            "username": "username",
+        }
+        for attr, display_label in user_attrs.items():
+            value = getattr(user, attr, None)
+            if value:
+                fout.write(
+                    f'            <div><span class="chat-details-label">{display_label}: </span>{HE(value)}</div>\n'
+                )
+        fout.write("          </details>\n        </li>\n")
+
     fout.write("      </ul>\n    </details>\n  </div></header>\n")
 
     fout.write("<main>\n")
@@ -961,11 +1013,19 @@ The include/exclude arguments are processed in the order given, and may be used 
         nargs="+",
         metavar="ChatID",
     )
+    parser.add_argument(
+        "--chat_names_remap_file",
+        type=Path,
+        help="Path to a CSV file that contains mappings from a chatID to name, one per line.  Useful for when someone has deleted their account on a platform and no longer has a name exposed.",
+    )
     args = parser.parse_args()
 
     init_cfg(args)
     # BBUG-2
     # check_beeper_version()
+
+    if args.chat_names_remap_file:
+        parse_chat_id_names_remap(args.chat_names_remap_file)
 
     if args.create_example:
         await create_example(args.output_root_dir)
