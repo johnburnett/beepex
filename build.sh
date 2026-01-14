@@ -15,7 +15,7 @@ else
   uv run ruff format
   uv run ty check
   uv run ruff check
-  uv run python beepex.py --token STUB_TOKEN --create_example ./example
+  uv run python beepex.py --token STUB_TOKEN --build ./example
   find ./example/ -name \*.html -exec uv run python test/validatehtml.py {} +
   uv run pyinstaller --noconfirm beepex.spec
 fi

@@ -937,6 +937,26 @@ async def create_example(output_root_dir: Path):
         fp.write(output_html)
 
 
+def update_readme():
+    parser = create_argparser(width=100)
+    usage_help = parser.format_help()
+
+    readme_path = Path(__file__).parent / "README.md"
+    with open(readme_path, encoding="utf-8") as fp:
+        readme_contents = fp.read()
+
+    usage_sentinel = "## Full usage\n"
+    sentinel_start = readme_contents.find(usage_sentinel)
+    assert sentinel_start
+    sentinel_end = sentinel_start + len(usage_sentinel)
+
+    with open(readme_path, "w", encoding="utf-8") as fp:
+        fp.write(readme_contents[:sentinel_end])
+        fp.write("```\n")
+        fp.write(usage_help)
+        fp.write("```\n")
+
+
 class IncludeExcludeSetArg(argparse.Action):
     arg_to_type = {
         "--include_account_ids": IncludeAccountSet,
@@ -958,10 +978,15 @@ class IncludeExcludeSetArg(argparse.Action):
         return self.option_strings[0]
 
 
-async def main():
+def create_argparser(width: int | None = None) -> argparse.ArgumentParser:
+    formatter = (
+        FlexiFormatter
+        if width is None
+        else lambda prog, **kwargs: FlexiFormatter(prog, width=width, **kwargs)
+    )
     parser = argparse.ArgumentParser(
         prog="beepex",
-        formatter_class=FlexiFormatter,
+        formatter_class=formatter,
         epilog="""
 The include/exclude arguments are processed in the order given, and may be used multiple times.  The starting set of chats to include depends upon the first include/exclude argument that is used:
 - If the first is an "include_" type, the include/excludes are "building up" the set of chat IDs from nothing.
@@ -980,7 +1005,7 @@ The include/exclude arguments are processed in the order given, and may be used 
         type=Path,
         help="Path to an env file that contains a definition of the BEEPER_ACCESS_TOKEN environment variable.",
     )
-    parser.add_argument("--create_example", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--build", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--include_account_ids",
         dest="include_exclude_sets",
@@ -1018,6 +1043,11 @@ The include/exclude arguments are processed in the order given, and may be used 
         type=Path,
         help="Path to a CSV file that contains mappings from a chatID to name, one per line.  Useful for when someone has deleted their account on a platform and no longer has a name exposed.",
     )
+    return parser
+
+
+async def main():
+    parser = create_argparser()
     args = parser.parse_args()
 
     init_cfg(args)
@@ -1027,8 +1057,9 @@ The include/exclude arguments are processed in the order given, and may be used 
     if args.chat_names_remap_file:
         parse_chat_id_names_remap(args.chat_names_remap_file)
 
-    if args.create_example:
+    if args.build:
         await create_example(args.output_root_dir)
+        update_readme()
     else:
         client = AsyncBeeperDesktop(access_token=cfg().access_token)
         await export_chats(client, args.output_root_dir, args.include_exclude_sets)

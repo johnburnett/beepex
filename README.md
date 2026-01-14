@@ -38,3 +38,42 @@ To export all chats to the directory `C:\temp\beepex_export`, run:
 ```
 beepex.exe C:\temp\beepex_export
 ```
+
+## Full usage
+```
+usage: beepex [-h] [-v] [--token TOKEN] [--env ENV]
+              [--include_account_ids AccountID [AccountID ...]]
+              [--exclude_account_ids AccountID [AccountID ...]]
+              [--include_chat_ids ChatID [ChatID ...]] [--exclude_chat_ids ChatID [ChatID ...]]
+              [--chat_names_remap_file CHAT_NAMES_REMAP_FILE]
+              output_root_dir
+
+positional arguments:
+  output_root_dir
+
+options:
+  -h, --help            show this help message and exit
+  -v, --version         show program's version number and exit
+  --token TOKEN         Beeper Desktop API access token. If not provided, uses the
+                        BEEPER_ACCESS_TOKEN environment variable, potentially read from a .env file
+                        if it is next to the beepex executable.
+  --env ENV             Path to an env file that contains a definition of the BEEPER_ACCESS_TOKEN
+                        environment variable.
+  --include_account_ids AccountID [AccountID ...]
+  --exclude_account_ids AccountID [AccountID ...]
+  --include_chat_ids ChatID [ChatID ...]
+  --exclude_chat_ids ChatID [ChatID ...]
+  --chat_names_remap_file CHAT_NAMES_REMAP_FILE
+                        Path to a CSV file that contains mappings from a chatID to name, one per
+                        line. Useful for when someone has deleted their account on a platform and no
+                        longer has a name exposed.
+
+The include/exclude arguments are processed in the order given, and may be used multiple times. The
+starting set of chats to include depends upon the first include/exclude argument that is used:
+- If the first is an "include_" type, the include/excludes are "building up" the set of chat IDs
+  from nothing.
+- If the first is an "exclude_" type, the include/excludes are "pruning down" the set of chat IDs
+  from all possible chats.
+- In either case, subsequent includes can re-add chats that were previously excluded, and vice-
+  versa.
+```
