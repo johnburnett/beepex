@@ -92,8 +92,8 @@ FILE_NAME_RESERVED_NAMES = {
 FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
 CONFIG: Config | None = None
 MAX_THUMB_DIM = 256
-# png files are often screenshots with text, so keep the thumbnails larger for legibility
-MAX_PNG_THUMB_DIM = 512
+# screenshots often have text, so keep the thumbnails larger for legibility
+MAX_SCREENSHOT_THUMB_DIM = 512
 USER_ID_TO_NAME_OVERRIDE: dict[UserID, str] = {}
 
 
@@ -388,11 +388,13 @@ def archive_attachment(
 
 
 def get_thumbnail_dim(media_file_path: Path) -> int | None:
-    suffix = media_file_path.suffix.casefold()
-    if suffix not in (".jpg", ".jpeg", ".png"):
-        return None
+    path_str = str(media_file_path).casefold()
+    file_ext = os.path.splitext(path_str)[1]
+    if file_ext in (".jpg", ".jpeg", ".png"):
+        is_screenshot = file_ext == ".png" or "screenshot" in path_str
+        return MAX_SCREENSHOT_THUMB_DIM if is_screenshot else MAX_THUMB_DIM
     else:
-        return MAX_PNG_THUMB_DIM if suffix == ".png" else MAX_THUMB_DIM
+        return None
 
 
 def get_thumbnail_file_path(media_file_path: Path, thumb_dir_path: Path) -> Path | None:
@@ -419,7 +421,7 @@ def create_thumbnail(media_file_path: Path, thumb_file_path: Path):
 async def message_to_html(
     fout: TextIO, work_queue: queue.Queue, paths: ExportPaths, chat: Chat, msg: Message
 ) -> None:
-    sec_class = "msg-self" if msg.is_sender else "msg-them"
+    sec_class = "ms" if msg.is_sender else "mt"
     ts_utc = msg.timestamp
     ts_local = ts_utc.astimezone()
     ts_utc_str = ts_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -427,18 +429,18 @@ async def message_to_html(
     replied_link = ""
     linked_message_id = getattr(msg, "linked_message_id", None)
     if linked_message_id:
-        replied_link = f'    <a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>\n'
+        replied_link = f'  <a title="Reply to message {HE(linked_message_id)}" href="#{LQ(linked_message_id)}">&nbsp;(replied &#x2934;&#xFE0E;)</a>\n'
     sender_name = USER_ID_TO_NAME_OVERRIDE.get(UserID(msg.sender_id), msg.sender_name)
     assert isinstance(sender_name, str)
     fout.write(
-        f'<div class="msg {sec_class}">\n'
-        f'  <div id="{HE(msg.id)}" class="msg-header">\n'
-        f'    <span class="msg-contact-name">{HE(sender_name)}</span>\n'
+        f'<div class="m {sec_class}">\n'
+        f' <div id="{HE(msg.id)}" class="mh">\n'
+        f'  <span class="mun">{HE(sender_name)}</span>\n'
         f"{replied_link}"
-        f'    <span class="msg-datetime" title="{ts_utc_str}">{ts_local_str}</span>\n'
-        f'    <a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>\n'
-        f"  </div>\n"
-        f"  <div>\n"
+        f'  <span class="mdt" title="{ts_utc_str}">{ts_local_str}</span>\n'
+        f'  <a title="Message {HE(msg.id)}" href="#{HE(msg.id)}">&#x1F517;&#xFE0E;</a>\n'
+        f" </div>\n"
+        f' <div class="mc">\n'
     )
 
     if msg.text:
@@ -446,15 +448,20 @@ async def message_to_html(
         msg_text = html.escape(msg_text, quote=False)
         msg_text = msg_text.replace("\n", "<br>\n")
         msg_text = bleach.linkify(msg_text)
-        fout.write(msg_text)
+        fout.write(f'  <div class="msg-text">{msg_text}</div>\n')
 
-    for att in msg.attachments if msg.attachments else []:
+    att_elements = []
+    for ii, att in enumerate(msg.attachments if msg.attachments else []):
         archived_file_path = archive_attachment(
             paths.media_dir, paths.att_source_to_hydrated, ts_local, att
         )
         if att.src_url:
             paths.att_source_to_archived[att.src_url] = archived_file_path
-        if archived_file_path:
+        if not archived_file_path:
+            att_elements.append(
+                f'<div class="mae">&#x26A0;&#xFE0E; Missing Attachment: "{att.src_url}"</div>'
+            )
+        else:
             thumb_file_path = get_thumbnail_file_path(
                 archived_file_path, paths.thumb_dir
             )
@@ -480,33 +487,42 @@ async def message_to_html(
                 else att_url
             )
 
-            dim_attr = (
-                f' width="{att.size.width}" height="{att.size.height}"'
-                if att.size
-                else ""
-            )
+            if att.size:
+                MAX_DIM = 300
+                width, height = int(att.size.width), int(att.size.height)
+                largest_dim = max(width, height)
+                if largest_dim > MAX_DIM:
+                    scale = MAX_DIM / largest_dim
+                    width = int(width * scale)
+                    height = int(height * scale)
+                dim_attr = f' width="{width}" height="{height}"'
+            else:
+                dim_attr = ""
+
             if att.type == "img":
-                fout.write(
-                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{thumb_url}" alt=""></a>\n'
+                att_elements.append(
+                    f'<a href="{att_url}"><img loading="lazy"{dim_attr} src="{thumb_url}" alt=""></a>'
                 )
             elif att.type == "video":
-                fout.write(
-                    f'<video controls loop playsinline{dim_attr} src="{att_url}"></video>\n'
+                att_elements.append(
+                    f'<video controls loop playsinline{dim_attr} src="{att_url}"></video>'
                 )
             elif att.type == "audio":
-                fout.write(f'<audio controls src="{att_url}"/>\n')
-        else:
-            fout.write(
-                f'<span class="error">&#x26A0;&#xFE0E; Missing Attachment: "{att.src_url}"</span>'
-            )
+                att_elements.append(f'<audio controls src="{att_url}"/>')
+    if att_elements:
+        fout.write('  <div class="mal">\n')
+        for att_element in att_elements:
+            fout.write(f'   <div class="ma">{att_element}</div>\n')
+        fout.write("  </div>\n")
 
-    fout.write("\n  </div>\n")
+    fout.write(" </div>\n")
 
     if msg.reactions:
         user_id_to_full_name: dict[UserID, str] = {}
         for user in chat.participants.items:
             user_id_to_full_name[UserID(user.id)] = str(user.full_name)
-        fout.write('  <span class="reactions">\n')
+        fout.write(' <div class="mrlp">\n')
+        fout.write('  <div class="mrl">\n')
         keys_to_names = defaultdict(list)
         for reaction in msg.reactions:
             name = str(
@@ -517,8 +533,10 @@ async def message_to_html(
             keys_to_names[reaction.reaction_key].append(name)
         for key, names in sorted(keys_to_names.items()):
             tooltip = f"{key}&#10;" + "&#10;".join([HE(name) for name in sorted(names)])
-            fout.write(f'    <span title="{tooltip}">{HE(key)}</span>\n')
-        fout.write("  </span>")
+            fout.write(
+                f'   <span class="msg-reaction" title="{tooltip}">{HE(key)}</span>\n'
+            )
+        fout.write("  </div>\n </div>\n")
 
     fout.write("</div>\n")
 
@@ -545,11 +563,11 @@ async def write_chat_html(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
-        f'  <meta charset="utf-8">\n'
-        f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"  <title>Chat: {chat_title}</title>\n"
-        f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
-        f'  <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
+        f' <meta charset="utf-8">\n'
+        f' <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f" <title>Chat: {chat_title}</title>\n"
+        f' <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
+        f' <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
         f"</head>\n"
         f"<body>\n"
     )
@@ -557,25 +575,25 @@ async def write_chat_html(
     user_names = [get_user_name(user) for user in chat.participants.items]
     fout.write(
         f"<header>\n"
-        f'  <div class="chat-header">\n'
-        f'    <div class="chat-header-title">\n'
-        f"      <h1>{chat_title}</h1>\n"
-        f'      <a class="gallery-link" href="{gallery_html_file_rel}">&#x25A6; Media Gallery</a>\n'
-        f"    </div>\n"
-        f"    <details><summary>Details</summary>\n"
-        f'      <div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
-        f'      <div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
-        f'      <div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
-        f'      <div><span class="chat-details-label">Participants: </span>{len(user_names)}</div>\n'
-        f"      <ul>\n"
+        f' <div class="chat-header">\n'
+        f'  <div class="chat-header-title">\n'
+        f"   <h1>{chat_title}</h1>\n"
+        f'   <a class="gallery-link" href="{gallery_html_file_rel}">&#x25A6; Media Gallery</a>\n'
+        f"  </div>\n"
+        f"  <details><summary>Details</summary>\n"
+        f'   <div><span class="chat-details-label">Account ID: </span>{HE(chat.account_id)}</div>\n'
+        f'   <div><span class="chat-details-label">Chat ID: </span>{HE(chat.id)}</div>\n'
+        f'   <div><span class="chat-details-label">Message Count: </span>{len(messages)}</div>\n'
+        f'   <div><span class="chat-details-label">Participants: </span>{len(user_names)}</div>\n'
+        f"   <ul>\n"
     )
     for user_name, user in sorted(
         zip(user_names, chat.participants.items), key=lambda it: it[0].casefold()
     ):
         fout.write(
-            f'        <li class="user-details">\n'
-            f'          <details class="user-details">\n'
-            f'            <summary class="user-details">{HE(user_name)}</summary>\n'
+            f'    <li class="user-details">\n'
+            f'     <details class="user-details">\n'
+            f'      <summary class="user-details">{HE(user_name)}</summary>\n'
         )
         user_attrs = {
             "id": "Beeper ID",
@@ -588,16 +606,16 @@ async def write_chat_html(
             value = getattr(user, attr, None)
             if value:
                 fout.write(
-                    f'            <div><span class="chat-details-label">{display_label}: </span>{HE(value)}</div>\n'
+                    f'      <div><span class="chat-details-label">{display_label}: </span>{HE(value)}</div>\n'
                 )
-        fout.write("          </details>\n        </li>\n")
+        fout.write("     </details>\n    </li>\n")
 
-    fout.write("      </ul>\n    </details>\n  </div></header>\n")
+    fout.write("   </ul>\n  </details>\n </div></header>\n")
 
-    fout.write("<main>\n")
+    fout.write('<main><div class="msg-list">\n')
     for msg in tqdm(messages, desc="Writing chat messages", leave=False):
         await message_to_html(fout, work_queue, paths, chat, msg)
-    fout.write("</main>\n")
+    fout.write("</div></main>\n")
 
     fout.write("</body></html>\n")
 
@@ -623,27 +641,27 @@ async def write_gallery_html(
         f"<!DOCTYPE html>\n"
         f'<html lang="en">\n'
         f"<head>\n"
-        f'  <meta charset="utf-8" />\n'
-        f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        f"  <title>Gallery: {chat_title}</title>\n"
-        f'  <link rel="stylesheet" href="{resource_dir_rel}/gallery.css">\n'
+        f' <meta charset="utf-8" />\n'
+        f' <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        f" <title>Gallery: {chat_title}</title>\n"
+        f' <link rel="stylesheet" href="{resource_dir_rel}/gallery.css">\n'
         f"</head>\n"
         f"<body>\n"
-        f"  <header>\n"
-        f'    <div class="wrap">\n'
-        f"      <h1>{chat_title}</h1>\n"
-        f'      <div id="search-bar">\n'
-        f'        <input id="search-text" type="search" placeholder="Filter..." />\n'
-        f'        <div id="search-count"></div>\n'
-        f"      </div>\n"
-        f"    </div>\n"
-        f"  </header>\n"
-        f"  <main>\n"
-        f'    <div class="wrap">\n'
-        f'      <div id="gallery-grid"></div>\n'
-        f"    </div>\n"
-        f"  </main>\n"
-        f"  <script>\n"
+        f" <header>\n"
+        f'  <div class="wrap">\n'
+        f"   <h1>{chat_title}</h1>\n"
+        f'   <div id="search-bar">\n'
+        f'    <input id="search-text" type="search" placeholder="Filter..." />\n'
+        f'    <div id="search-count"></div>\n'
+        f"   </div>\n"
+        f"  </div>\n"
+        f" </header>\n"
+        f" <main>\n"
+        f'  <div class="wrap">\n'
+        f'   <div id="gallery-grid"></div>\n'
+        f"  </div>\n"
+        f" </main>\n"
+        f" <script>\n"
     )
     media_dir_rel = paths.media_dir.relative_to(
         paths.gallery_html_file.parent, walk_up=True
@@ -651,10 +669,10 @@ async def write_gallery_html(
     thumb_dir_rel = paths.thumb_dir.relative_to(
         paths.gallery_html_file.parent, walk_up=True
     ).as_posix()
-    fout.write(f'    window.CHAT_FILE_URL = "{chat_file_rel}";\n')
-    fout.write(f'    window.MEDIA_PREFIX = "{media_dir_rel}";\n')
-    fout.write(f'    window.THUMB_PREFIX = "{thumb_dir_rel}";\n')
-    fout.write("    window.MEDIA = [\n")
+    fout.write(f'  window.CHAT_FILE_URL = "{chat_file_rel}";\n')
+    fout.write(f'  window.MEDIA_PREFIX = "{media_dir_rel}";\n')
+    fout.write(f'  window.THUMB_PREFIX = "{thumb_dir_rel}";\n')
+    fout.write("  window.MEDIA = [\n")
     # BBUG-3: works around multiple src_urls resolving to the same archive file path
     seen_archive_urls = set()
     for msg in messages:
@@ -668,9 +686,9 @@ async def write_gallery_html(
                         f'["{os.path.basename(archived_file_path)}","{msg.id}",{1 if has_thumb else 0}],\n'
                     )
     fout.write(
-        f"    ]\n"
-        f"  </script>\n"
-        f'  <script src="{resource_dir_rel}/gallery.js"></script>\n'
+        f"  ]\n"
+        f" </script>\n"
+        f' <script src="{resource_dir_rel}/gallery.js"></script>\n'
         f"</body>\n"
         f"</html>\n"
     )
@@ -697,24 +715,24 @@ def write_chats_index(
             f"<!DOCTYPE html>\n"
             f'<html lang="en">\n'
             f"<head>\n"
-            f'  <meta charset="utf-8">\n'
-            f'  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-            f"  <title>Beeper Chats</title>\n"
-            f'  <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
-            f'  <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
+            f' <meta charset="utf-8">\n'
+            f' <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            f" <title>Beeper Chats</title>\n"
+            f' <link rel="stylesheet" href="{resource_dir_rel}/water.css">\n'
+            f' <link rel="stylesheet" href="{resource_dir_rel}/chat.css">\n'
             f"</head>\n"
             f"<body>\n"
             f"<header>\n"
-            f'  <div class="chat-header">\n'
-            f"    <h1>Beeper Chats</h1>\n"
-            f"    <details><summary>Details</summary>\n"
-            f'      <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
-            f'      <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
-            f'      <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
-            f'      <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
-            f'      <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
-            f"    </details>\n"
-            f"  </div>\n"
+            f' <div class="chat-header">\n'
+            f"  <h1>Beeper Chats</h1>\n"
+            f"  <details><summary>Details</summary>\n"
+            f'   <div><span class="chat-details-label">beepex Version: </span>{HE(str(__version__))}</div>\n'
+            f'   <div><span class="chat-details-label">Export Host: </span>{HE(hostname)}</div>\n'
+            f'   <div><span class="chat-details-label">Export Date: </span>{HE(export_ymd)}</div>\n'
+            f'   <div><span class="chat-details-label">Export Time: </span>{HE(export_hms)}</div>\n'
+            f'   <div><span class="chat-details-label">Export Duration: </span>{HE(str(export_duration))}</div>\n'
+            f"  </details>\n"
+            f" </div>\n"
             f"</header>\n"
             f"<main>\n"
         )
@@ -724,24 +742,24 @@ def write_chats_index(
             account_id = chat_id_to_account_id[chat_id]
             account_id_to_chat_ids[account_id].append(chat_id)
 
-        fp.write("  <ul>\n")
+        fp.write(" <ul>\n")
         for account_id, account_chat_ids in sorted(
             account_id_to_chat_ids.items(),
             key=lambda it: account_id_to_name[it[0]].casefold(),
         ):
-            fp.write(f"    <li>{account_id_to_name[account_id]}\n")
-            fp.write("      <ul>\n")
+            fp.write(f"  <li>{account_id_to_name[account_id]}\n")
+            fp.write("   <ul>\n")
             for chat_id in sorted(
                 account_chat_ids, key=lambda cid: chat_id_to_title[cid].casefold()
             ):
                 chat_html_path = chat_id_to_html_path[chat_id]
                 chat_url = chat_html_path.relative_to(output_root_dir)
                 fp.write(
-                    f'        <li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat_id])}</a></li>\n'
+                    f'    <li><a href="{LQ(chat_url.as_posix())}">{HE(chat_id_to_title[chat_id])}</a></li>\n'
                 )
-            fp.write("      </ul>\n")
-            fp.write("    </li>\n")
-        fp.write("  </ul>\n</main>\n</body></html>\n")
+            fp.write("   </ul>\n")
+            fp.write("  </li>\n")
+        fp.write(" </ul>\n</main>\n</body></html>\n")
     return index_file_path
 
 
