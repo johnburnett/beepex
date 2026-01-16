@@ -24,7 +24,7 @@ from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
 from dotenv import load_dotenv
 from packaging import version
-from PIL import Image
+from PIL import Image, ImageOps
 import requests
 from rich import traceback
 from tqdm import tqdm
@@ -415,6 +415,7 @@ def create_thumbnail(media_file_path: Path, thumb_file_path: Path):
     max_dim = get_thumbnail_dim(media_file_path)
     assert isinstance(max_dim, int)
     image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS, reducing_gap=2.0)
+    image = ImageOps.exif_transpose(image)
     image.save(thumb_file_path, quality="medium")
 
 
