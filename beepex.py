@@ -335,7 +335,8 @@ async def hydrate_attachment(client: AsyncBeeperDesktop, url: str) -> Path | Non
     assert isinstance(hydrated_url, str)
     assert hydrated_url.startswith("file://")
     try:
-        return Path.from_uri(hydrated_url)
+        path = Path.from_uri(hydrated_url)
+        return path if path.exists() else None
     except ValueError:
         # Some attachments were incorrectly sent by some Android clients, and
         # are relative file:// paths that point to nothing.
