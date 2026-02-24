@@ -374,11 +374,11 @@ def archive_attachment(
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     # time_sent is not enough to guarantee unique file names, so add a little
     # random on the end.
-    hsh = hashlib.sha256()
-    hsh.update(att.src_url.encode("utf-8"))
-    src_url_hash = hsh.hexdigest()[:8]
+    with open(hydrated_file_path, 'rb') as fp:
+        digest = hashlib.file_digest(fp, 'sha256')
+    file_hash = digest.hexdigest()[:8]
     target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
-    target_file_name = f"{time_sent_str}_{src_url_hash}_{target_file_name}"
+    target_file_name = f"{time_sent_str}_{file_hash}_{target_file_name}"
     target_file_name = sanitize_file_name(target_file_name) + target_file_ext
     archived_file_path = media_dir_path / target_file_name
     mtime = time_sent.timestamp()
