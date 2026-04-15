@@ -24,6 +24,7 @@ from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
 from dotenv import load_dotenv
 from packaging import version
+import pathvalidate
 from PIL import Image, ImageOps
 import requests
 from rich import traceback
@@ -82,14 +83,7 @@ IncludeExcludeSet = Union[IncludeAccountSet | ExcludeAccountSet | IncludeChatSet
 # fmt: on
 
 
-# fmt: off
-FILE_NAME_RESERVED_NAMES = {
-    "aux", "con", "nul", "prn",
-    "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-    "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-}
 # fmt: on
-FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
 CONFIG: Config | None = None
 MAX_THUMB_DIM = 256
 # screenshots often have text, so keep the thumbnails larger for legibility
@@ -312,10 +306,7 @@ def LQ(s):
 
 
 def sanitize_file_name(file_name: str) -> str:
-    if file_name.casefold() in FILE_NAME_RESERVED_NAMES:
-        file_name = file_name + "_"
-    file_name = FILE_NAME_RESERVED_CHARS_RE.sub("_", file_name)
-    file_name = file_name.strip(" \t\n.")
+    file_name = pathvalidate.sanitize_filename(file_name, replacement_text="_")
     return file_name if file_name else "_"
 
 
@@ -374,8 +365,8 @@ def archive_attachment(
     time_sent_str = time_sent.strftime("%Y-%m-%d_%H-%M-%S")
     # time_sent is not enough to guarantee unique file names, so add a little
     # random on the end.
-    with open(hydrated_file_path, 'rb') as fp:
-        digest = hashlib.file_digest(fp, 'sha256')
+    with open(hydrated_file_path, "rb") as fp:
+        digest = hashlib.file_digest(fp, "sha256")
     file_hash = digest.hexdigest()[:8]
     target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
     target_file_name = f"{time_sent_str}_{file_hash}_{target_file_name}"
