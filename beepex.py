@@ -24,6 +24,7 @@ from beeper_desktop_api.types import Attachment, Chat, Message, User
 import bleach
 from dotenv import load_dotenv
 from packaging import version
+import pathvalidate
 from PIL import Image, ImageOps
 import requests
 from rich import traceback
@@ -82,14 +83,7 @@ IncludeExcludeSet = Union[IncludeAccountSet | ExcludeAccountSet | IncludeChatSet
 # fmt: on
 
 
-# fmt: off
-FILE_NAME_RESERVED_NAMES = {
-    "aux", "con", "nul", "prn",
-    "com0", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-    "lpt0", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-}
 # fmt: on
-FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
 FILE_NAME_UNDESIRED_CHARS_RE = re.compile(r"[ \r\n\t]")
 MAX_ATTACHMENT_FILE_NAME_LEN = 80
 CONFIG: Config | None = None
@@ -314,12 +308,10 @@ def LQ(s):
 
 
 def sanitize_file_name(file_name: str) -> str:
-    if file_name.casefold() in FILE_NAME_RESERVED_NAMES:
-        file_name = file_name + "_"
-    file_name = FILE_NAME_RESERVED_CHARS_RE.sub("_", file_name)
     file_name = FILE_NAME_UNDESIRED_CHARS_RE.sub("_", file_name)
     file_name = re.sub("_+", "_", file_name)
     file_name = file_name[:MAX_ATTACHMENT_FILE_NAME_LEN]
+    file_name = pathvalidate.sanitize_filename(file_name, replacement_text="_")
     return file_name if file_name else "_"
 
 
