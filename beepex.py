@@ -851,7 +851,8 @@ async def export_chats(
     async for chat in client.chats.list():
         all_chat_ids.add(chat.id)
         chat_id_to_account_id[chat.id] = chat.account_id
-        account_id_to_name[AccountID(chat.account_id)] = str(chat.network)
+        chat_name = chat.network if chat.network else chat.account_id
+        account_id_to_name[AccountID(chat.account_id)] = str(chat_name)
     chat_ids = filter_chat_ids(
         all_chat_ids, chat_id_to_account_id, include_exclude_sets
     )
