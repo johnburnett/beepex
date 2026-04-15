@@ -284,7 +284,13 @@ def get_chat_title(chat: Chat, messages: list[Message]) -> str:
         # with this chat's chat_id, but it isn't in the returned chat participant list).
         # str(...) cast is to work around mypy complaining that .get is type "str|None"
         top_sender_names = [str(id_to_name.get(id, id)) for id in top_sender_ids]
-        full_title = ", ".join(top_sender_names)
+
+        if len(top_sender_names) > 0:
+            full_title = ", ".join(top_sender_names)
+        else:
+            # If we go through all that work and there are no senders, just use the
+            # chat title as a fallback
+            full_title = chat.title
     assert full_title
     return full_title
 
