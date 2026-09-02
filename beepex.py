@@ -90,6 +90,8 @@ FILE_NAME_RESERVED_NAMES = {
 }
 # fmt: on
 FILE_NAME_RESERVED_CHARS_RE = re.compile(r'["*/:<>?\\|]')
+FILE_NAME_UNDESIRED_CHARS_RE = re.compile(r"[ \r\n\t]")
+MAX_ATTACHMENT_FILE_NAME_LEN = 80
 CONFIG: Config | None = None
 MAX_THUMB_DIM = 256
 # screenshots often have text, so keep the thumbnails larger for legibility
@@ -256,7 +258,7 @@ def get_chat_top_sender_ids(
     )
     for msg in messages:
         sent_histogram[msg.sender_id] += 1
-    sorted_senders = sorted(sent_histogram.items(), key=lambda it: it[1])
+    sorted_senders = sorted(sent_histogram.items(), key=lambda it: it[1], reverse=True)
     top_senders = [id for id, _ in filter(lambda it: it[0] != self_id, sorted_senders)][
         :max_senders
     ]
@@ -315,7 +317,9 @@ def sanitize_file_name(file_name: str) -> str:
     if file_name.casefold() in FILE_NAME_RESERVED_NAMES:
         file_name = file_name + "_"
     file_name = FILE_NAME_RESERVED_CHARS_RE.sub("_", file_name)
-    file_name = file_name.strip(" \t\n.")
+    file_name = FILE_NAME_UNDESIRED_CHARS_RE.sub("_", file_name)
+    file_name = re.sub("_+", "_", file_name)
+    file_name = file_name[:MAX_ATTACHMENT_FILE_NAME_LEN]
     return file_name if file_name else "_"
 
 
