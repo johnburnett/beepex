@@ -1,0 +1,2 @@
+- Eric Gerlach, http://eric.gerlach.ca/
+- John Burnett, https://www.johnburnett.com/
