@@ -374,8 +374,10 @@ def archive_attachment(
         digest = hashlib.file_digest(fp, "sha256")
     file_hash = digest.hexdigest()[:8]
     target_file_name, target_file_ext = os.path.splitext(att.file_name or "")
+    # some file names have url query strings at the end, e.g. "foo.jpg?width=100"
+    target_file_ext = target_file_ext.split("?")[0]
     target_file_name = f"{time_sent_str}_{file_hash}_{target_file_name}"
-    target_file_name = sanitize_file_name(target_file_name) + target_file_ext
+    target_file_name = sanitize_file_name(target_file_name + target_file_ext)
     archived_file_path = media_dir_path / target_file_name
     mtime = time_sent.timestamp()
     if not archived_file_path.exists():
